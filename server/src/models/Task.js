@@ -13,6 +13,12 @@ const taskSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    parentTaskId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Task',
+      default: null,
+      index: true,
+    },
     assigneeIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
     categoryId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -26,6 +32,12 @@ const taskSchema = new mongoose.Schema(
     estimatedDurationMinutes: { type: Number, min: 0, default: null },
     completedAt: { type: Date, default: null },
     isArchived: { type: Boolean, default: false },
+    parentTaskId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Task',
+      default: null,
+      index: true,
+    },
   },
   { timestamps: true }
 );

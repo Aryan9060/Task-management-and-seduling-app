@@ -15,7 +15,7 @@ function endOfUtcDay(date) {
 export const getSummary = asyncHandler(async (req, res) => {
   const userId = new mongoose.Types.ObjectId(req.user._id);
   const visibility = { $or: [{ ownerId: userId }, { assigneeIds: userId }] };
-  const base = { ...visibility, isArchived: false };
+  const base = { ...visibility, isArchived: false, parentTaskId: null };
   const now = new Date();
 
   const trendStart = startOfUtcDay(now);
@@ -44,6 +44,7 @@ export const getSummary = asyncHandler(async (req, res) => {
             $and: [
               visibility,
               { isArchived: false },
+              { parentTaskId: null },
               { status: 'completed' },
               { completedAt: { $gte: trendStart } },
             ],

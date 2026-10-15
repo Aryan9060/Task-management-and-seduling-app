@@ -9,7 +9,9 @@ A full-stack personal productivity and team task management web application buil
 - **Task Management** — Create, update, delete, and track tasks with title, description, priority, deadline, and estimated duration
 - **Task Status** — To Do, In Progress, Completed, Cancelled; Overdue derived automatically from deadline
 - **Categories** — Organize tasks into custom categories (Study, Development, Personal, Health, etc.)
-- **Subtasks** — Break large tasks into smaller subtasks with individual completion tracking
+- **Subtasks** — Break tasks into subtasks with individual completion tracking; the parent shows completed/total progress
+- **Assignees** — Assign tasks to other users; assignees can view their assigned tasks and update status, while only the owner can edit everything else
+- **Activity log** — Automatic audit trail per task: status, priority, due/start date, category, and assignee changes, plus archive/restore, each with actor and timestamp
 - **Recurring Tasks** — Schedule tasks to repeat daily, weekly, or monthly
 - **Dashboard & Analytics** — Summary of total, completed, pending, and overdue tasks with weekly trends
 - **Authentication** — JWT access + refresh tokens: short-lived access token with an HttpOnly refresh cookie, rotated on every refresh and revocable server-side
@@ -47,7 +49,7 @@ A full-stack personal productivity and team task management web application buil
 │   │   ├── config/          # DB connection and config
 │   │   ├── controllers/     # Route handler logic
 │   │   ├── middleware/       # Auth, error handling
-│   │   ├── models/          # Mongoose models (User, Task, Category)
+│   │   ├── models/          # Mongoose models (User, Task, TaskActivity, Category)
 │   │   ├── routes/          # API route definitions
 │   │   └── utils/           # Helper utilities
 │   ├── scripts/
@@ -138,10 +140,15 @@ The frontend will be available at `http://localhost:5173`.
 | POST | `/api/auth/refresh` | Exchange the refresh cookie for a new access token (rotates the refresh token) | Cookie |
 | POST | `/api/auth/logout` | Revoke the refresh token and clear the cookie | Cookie |
 | GET | `/api/auth/me` | Current user | Yes |
-| GET | `/api/tasks` | Get all tasks | Yes |
-| POST | `/api/tasks` | Create a task | Yes |
-| PUT | `/api/tasks/:id` | Update a task | Yes |
-| DELETE | `/api/tasks/:id` | Delete a task | Yes |
+| GET | `/api/tasks` | Get all top-level tasks (subtasks are excluded) | Yes |
+| POST | `/api/tasks` | Create a task, optionally with assignees | Yes |
+| GET | `/api/tasks/:id` | Get a task with its subtasks and progress | Yes |
+| PUT | `/api/tasks/:id` | Update a task (owner: all fields; assignee: status only) | Yes |
+| DELETE | `/api/tasks/:id` | Archive a task and its subtasks | Yes |
+| POST | `/api/tasks/:id/restore` | Restore a task and its subtasks | Yes |
+| POST | `/api/tasks/:id/subtasks` | Create a subtask under a task (owner only) | Yes |
+| GET | `/api/tasks/:id/activities` | Activity history for a task | Yes |
+| GET | `/api/users` | Search users by name/email (for assignment) | Yes |
 | GET | `/api/categories` | Get all categories | Yes |
 | POST | `/api/categories` | Create a category | Yes |
 | DELETE | `/api/categories/:id` | Delete a category | Yes |

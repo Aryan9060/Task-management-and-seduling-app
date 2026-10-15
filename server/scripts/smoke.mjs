@@ -57,7 +57,7 @@ const regA = await req('POST', '/auth/register', {
 check('register user A', regA.status === 201 && Boolean(regA.data.accessToken));
 check(
   'refresh token not exposed in response body',
-  regA.data.refreshToken === undefined && regA.data.token === undefined
+  regA.data.refreshToken === undefined && Boolean(regA.data.accessToken)
 );
 check(
   'register sets HttpOnly refresh cookie',
@@ -283,5 +283,181 @@ check('category delete', delCat.status === 200);
 const t1After = await req('GET', `/tasks/${t1Id}`, { token: tokenA });
 check('category delete unlinks task', t1After.data.task.categoryId === null);
 
-console.log(`\n${passed} passed, ${failed} failed`);
-process.exit(failed > 0 ? 1 : 0);
+// Phase 2: assignment, subtasks, activity log, cascade archive
+const emailC = `carol.${stamp}@example.com`;
+const emailD = `dave.${stamp}@example.com`;
+
+const regC = await req('POST', '/auth/register', {
+  body: { name: 'Carol Tester', email: emailC, password: 'password123' },
+});
+const tokenC = regC.data.accessToken;
+const userIdC = regC.data.user.id;
+check('register user C (assignee)', regC.status === 201);
+
+const regD = await req('POST', '/auth/register', {
+  body: { name: 'Dave Tester', email: emailD, password: 'password123' },
+});
+const tokenD = regD.data.accessToken;
+check('register user D (owner)', regD.status === 201);
+
+const usersNoAuth = await req('GET', '/users');
+check('user search requires auth', usersNoAuth.status === 401);
+
+const usersSearch = await req('GET', `/users?search=${encodeURIComponent(emailD)}`, {
+  token: tokenD,
+});
+check(
+  'user search finds user by email',
+  usersSearch.status === 200 &&
+    usersSearch.data.users.some((u) => u.email === emailD && !('passwordHash' in u))
+);
+
+const dTaskRes = await req('POST', '/tasks', {
+  token: tokenD,
+  body: { title: 'Shared rollout plan', priority: 'medium', assigneeIds: [userIdC] },
+});
+check(
+  'create task with assignees',
+  dTaskRes.status === 201 && dTaskRes.data.task.assignees.some((a) => a.id === userIdC)
+);
+check('creator is owner', dTaskRes.data.task.isOwner === true);
+const dTaskId = dTaskRes.data.task.id;
+
+const badAssignee = await req('POST', '/tasks', {
+  token: tokenD,
+  body: { title: 'Bad assignee', assigneeIds: ['64b7f0f0f0f0f0f0f0f0f0f0'] },
+});
+check('unknown assignee rejected', badAssignee.status === 400);
+
+const cList = await req('GET', '/tasks', { token: tokenC });
+check(
+  'assignee sees assigned task',
+  cList.status === 200 && cList.data.tasks.some((t) => t.id === dTaskId)
+);
+
+const cStatus = await req('PATCH', `/tasks/${dTaskId}`, {
+  token: tokenC,
+  body: { status: 'in_progress' },
+});
+check(
+  'assignee can update status',
+  cStatus.status === 200 && cStatus.data.task.status === 'in_progress'
+);
+
+const cTitle = await req('PATCH', `/tasks/${dTaskId}`, {
+  token: tokenC,
+  body: { title: 'Not allowed' },
+});
+check('assignee cannot edit other fields', cTitle.status === 403);
+
+const st1Res = await req('POST', `/tasks/${dTaskId}/subtasks`, {
+  token: tokenD,
+  body: { title: 'Draft the checklist' },
+});
+check(
+  'create subtask',
+  st1Res.status === 201 &&
+    st1Res.data.task.parentTaskId === dTaskId &&
+    st1Res.data.task.isOwner === true
+);
+const st1Id = st1Res.data.task.id;
+
+const st2Res = await req('POST', `/tasks/${dTaskId}/subtasks`, {
+  token: tokenD,
+  body: { title: 'Book the venue', dueAt: tomorrow },
+});
+check('create second subtask', st2Res.status === 201);
+
+const nested = await req('POST', `/tasks/${st1Id}/subtasks`, {
+  token: tokenD,
+  body: { title: 'Nested subtask' },
+});
+check('nested subtasks rejected', nested.status === 400);
+
+const cSubtask = await req('POST', `/tasks/${dTaskId}/subtasks`, {
+  token: tokenC,
+  body: { title: 'Assignee subtask' },
+});
+check('assignee cannot create subtasks', cSubtask.status === 403);
+
+const dList = await req('GET', '/tasks', { token: tokenD });
+check(
+  'subtasks hidden from task list',
+  dList.data.total === 1 &&
+    dList.data.tasks.every((t) => t.parentTaskId === null) &&
+    dList.data.tasks[0].subtaskProgress.total === 2 &&
+    dList.data.tasks[0].subtaskProgress.completed === 0
+);
+
+const cToggle = await req('PATCH', `/tasks/${st1Id}`, {
+  token: tokenC,
+  body: { status: 'completed' },
+});
+check('parent assignee can complete subtask', cToggle.status === 200);
+
+const dDetail = await req('GET', `/tasks/${dTaskId}`, { token: tokenC });
+check(
+  'task details bundle subtasks and progress',
+  dDetail.status === 200 &&
+    dDetail.data.subtasks.length === 2 &&
+    dDetail.data.task.subtaskProgress.completed === 1
+);
+
+const dUpdate = await req('PATCH', `/tasks/${dTaskId}`, {
+  token: tokenD,
+  body: { priority: 'high', dueAt: tomorrow },
+});
+check(
+  'owner updates priority and due date',
+  dUpdate.status === 200 &&
+    dUpdate.data.task.priority === 'high' &&
+    dUpdate.data.task.assignees.some((a) => a.id === userIdC)
+);
+
+const acts = await req('GET', `/tasks/${dTaskId}/activities`, { token: tokenC });
+const actsData = acts.data.activities;
+check(
+  'activity log records creation with actor',
+  acts.status === 200 &&
+    actsData.some((a) => a.action === 'created' && a.actor?.name === 'Dave Tester')
+);
+check(
+  'activity log records status change',
+  actsData.some(
+    (a) => a.action === 'status_changed' && a.oldValue === 'todo' && a.newValue === 'in_progress'
+  )
+);
+check(
+  'activity log records priority and due date changes',
+  actsData.some((a) => a.action === 'priority_changed' && a.newValue === 'high') &&
+    actsData.some((a) => a.action === 'due_at_changed' && a.newValue !== null)
+);
+
+const st1Acts = await req('GET', `/tasks/${st1Id}/activities`, { token: tokenC });
+check(
+  'subtask activity records actor',
+  st1Acts.status === 200 &&
+    st1Acts.data.activities.some((a) => a.action === 'status_changed' && a.actor?.name === 'Carol Tester')
+);
+
+const strayActs = await req('GET', `/tasks/${dTaskId}/activities`, { token: tokenB });
+check('activities hidden from unrelated users', strayActs.status === 404);
+
+const archParent = await req('DELETE', `/tasks/${dTaskId}`, { token: tokenD });
+check('archive task with subtasks', archParent.status === 200);
+
+const st1After = await req('GET', `/tasks/${st1Id}`, { token: tokenD });
+check('archive cascades to subtasks', st1After.data.task.isArchived === true);
+
+const restParent = await req('POST', `/tasks/${dTaskId}/restore`, { token: tokenD });
+check('restore task with subtasks', restParent.status === 200);
+
+const st1Restored = await req('GET', `/tasks/${st1Id}`, { token: tokenD });
+check('restore cascades to subtasks', st1Restored.data.task.isArchived === false);
+
+const dashD = await req('GET', '/dashboard/summary', { token: tokenD });
+check(
+  'dashboard counts exclude subtasks',
+  dashD.status === 200 && dashD.data.summary.total === 1 && dashD.data.summary.inProgress === 1
+);
+

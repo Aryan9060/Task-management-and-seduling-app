@@ -33,8 +33,8 @@ export default function Tasks() {
     }
   }, []);
 
-  const loadTasks = useCallback(async (currentFilters) => {
-    setLoading(true);
+  const loadTasks = useCallback(async (currentFilters, { silent = false } = {}) => {
+    if (!silent) setLoading(true);
     setError('');
     try {
       const params = {
@@ -54,7 +54,7 @@ export default function Tasks() {
     } catch (err) {
       setError(errorMessage(err, 'Unable to load tasks'));
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
@@ -221,6 +221,7 @@ export default function Tasks() {
               onEdit={openEdit}
               onArchive={handleArchive}
               onRestore={handleRestore}
+              onChanged={() => loadTasks(filters, { silent: true })}
             />
           ))}
         </div>

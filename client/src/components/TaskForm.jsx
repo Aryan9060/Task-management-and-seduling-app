@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import api, { errorMessage } from '../api/client.js';
 import { toLocalInput, fromLocalInput } from '../utils/datetime.js';
 
@@ -29,12 +29,54 @@ function taskToForm(task) {
 export default function TaskForm({ task, categories, onClose, onSaved }) {
   const isEdit = Boolean(task);
   const [form, setForm] = useState(isEdit ? taskToForm(task) : EMPTY);
+  const [assignees, setAssignees] = useState(isEdit ? (task.assignees ?? []) : []);
+  const [userQuery, setUserQuery] = useState('');
+  const [userResults, setUserResults] = useState([]);
+  const [searching, setSearching] = useState(false);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    const query = userQuery.trim();
+    if (!query) {
+      setUserResults([]);
+      return undefined;
+    }
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const { data } = await api.get('/users', { params: { search: query } });
+        if (!cancelled) setUserResults(data.users);
+      } catch {
+        if (!cancelled) setUserResults([]);
+      } finally {
+        if (!cancelled) setSearching(false);
+      }
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [userQuery]);
 
   const setField = (field) => (event) => {
     setForm((prev) => ({ ...prev, [field]: event.target.value }));
   };
+
+  const addAssignee = (user) => {
+    setAssignees((prev) =>
+      prev.some((a) => a.id === user.id) ? prev : [...prev, { id: user.id, name: user.name, email: user.email }]
+    );
+    setUserQuery('');
+    setUserResults([]);
+  };
+
+  const removeAssignee = (id) => {
+    setAssignees((prev) => prev.filter((a) => a.id !== id));
+  };
+
+  const visibleResults = userResults.filter((u) => !assignees.some((a) => a.id === u.id));
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -50,6 +92,7 @@ export default function TaskForm({ task, categories, onClose, onSaved }) {
       dueAt: fromLocalInput(form.dueAt),
       estimatedDurationMinutes:
         form.estimatedDurationMinutes === '' ? null : Number(form.estimatedDurationMinutes),
+      assigneeIds: assignees.map((a) => a.id),
     };
 
     if (!payload.title) {
@@ -106,6 +149,53 @@ export default function TaskForm({ task, categories, onClose, onSaved }) {
               maxLength={5000}
             />
           </label>
+
+          <div className="field">
+            <span>Assignees</span>
+            <div className="assignee-picker">
+              {assignees.map((assignee) => (
+                <span key={assignee.id} className="assignee-chip">
+                  {assignee.name}
+                  <button
+                    type="button"
+                    className="assignee-chip-remove"
+                    onClick={() => removeAssignee(assignee.id)}
+                    aria-label={`Remove ${assignee.name}`}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+              <input
+                type="search"
+                className="assignee-search"
+                placeholder="Search people by name or email..."
+                value={userQuery}
+                onChange={(e) => setUserQuery(e.target.value)}
+              />
+            </div>
+            {userQuery.trim() && (
+              <div className="assignee-results">
+                {searching ? (
+                  <div className="assignee-empty">Searching...</div>
+                ) : visibleResults.length > 0 ? (
+                  visibleResults.map((user) => (
+                    <button
+                      type="button"
+                      key={user.id}
+                      className="assignee-result"
+                      onClick={() => addAssignee(user)}
+                    >
+                      <span className="assignee-result-name">{user.name}</span>
+                      <span className="assignee-result-email">{user.email}</span>
+                    </button>
+                  ))
+                ) : (
+                  <div className="assignee-empty">No matching users</div>
+                )}
+              </div>
+            )}
+          </div>
 
           <div className="form-grid">
             <label className="field">

@@ -856,3 +856,274 @@ a {
     justify-content: flex-end;
   }
 }
+
+/* Phase 2: expandable task details, subtasks, activity, assignees */
+
+.btn-small {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.8rem;
+}
+
+.badge-subtasks {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.badge-assignee {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  font-weight: 600;
+}
+
+.task-assignees {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.task-card-expanded {
+  border-color: var(--primary);
+}
+
+.task-details {
+  flex-basis: 100%;
+  width: 100%;
+  border-top: 1px solid var(--border);
+  padding-top: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.task-details-loading {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.details-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.details-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.details-heading h4 {
+  margin: 0;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.subtask-progress {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.subtask-progress-bar {
+  width: 120px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.subtask-progress-fill {
+  height: 100%;
+  background: var(--success);
+  border-radius: 999px;
+  transition: width 0.2s ease;
+}
+
+.subtask-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.subtask-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.subtask-row-archived {
+  opacity: 0.6;
+}
+
+.subtask-check {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.subtask-check input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--success);
+  cursor: pointer;
+}
+
+.subtask-meta {
+  font-size: 0.78rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.subtask-empty {
+  color: var(--muted);
+  font-size: 0.88rem;
+  list-style: none;
+}
+
+.subtask-add {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.subtask-add .input {
+  flex: 1;
+}
+
+.activity-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.activity-item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+}
+
+.activity-action {
+  font-weight: 700;
+}
+
+.activity-detail {
+  color: var(--text);
+}
+
+.activity-meta {
+  color: var(--muted);
+  font-size: 0.78rem;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+/* Assignee picker in the task form */
+
+.assignee-picker {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.4rem 0.5rem;
+  background: var(--surface);
+}
+
+.assignee-search {
+  flex: 1;
+  min-width: 160px;
+  border: none;
+  outline: none;
+  font: inherit;
+  font-size: 0.9rem;
+  background: transparent;
+}
+
+.assignee-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: var(--primary-soft);
+  color: var(--primary);
+  border-radius: 999px;
+  padding: 0.2rem 0.3rem 0.2rem 0.65rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.assignee-chip-remove {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.1rem 0.35rem;
+  border-radius: 999px;
+}
+
+.assignee-chip-remove:hover {
+  background: rgba(79, 70, 229, 0.15);
+}
+
+.assignee-results {
+  margin-top: 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.assignee-result {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 0.45rem 0.65rem;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.assignee-result:hover {
+  background: var(--primary-soft);
+}
+
+.assignee-result-name {
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.assignee-result-email {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.assignee-empty {
+  padding: 0.45rem 0.65rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
