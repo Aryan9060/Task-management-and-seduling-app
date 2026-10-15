@@ -9,7 +9,7 @@ export default async function requireAuth(req, res, next) {
   }
 
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    const payload = jwt.verify(token, process.env.JWT_ACCESS_SECRET);
     const user = await User.findById(payload.sub);
     if (!user) return next(new HttpError(401, 'Account no longer exists'));
     req.user = user;

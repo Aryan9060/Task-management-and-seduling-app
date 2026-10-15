@@ -14,6 +14,13 @@ const userSchema = new mongoose.Schema(
     passwordHash: { type: String, required: true },
     role: { type: String, enum: ['user', 'admin'], default: 'user' },
     timeZone: { type: String, default: 'UTC' },
+    refreshTokens: [
+      {
+        _id: false,
+        tokenHash: { type: String, required: true },
+        expiresAt: { type: Date, required: true },
+      },
+    ],
   },
   { timestamps: true }
 );

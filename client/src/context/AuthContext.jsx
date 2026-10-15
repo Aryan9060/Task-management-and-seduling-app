@@ -1,25 +1,20 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import api from '../api/client.js';
+import api, { refreshSession, setAccessToken, clearAccessToken } from '../api/client.js';
 
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(Boolean(localStorage.getItem('tm_token')));
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const token = localStorage.getItem('tm_token');
-    if (!token) return undefined;
-
     let cancelled = false;
-    api
-      .get('/auth/me')
-      .then(({ data }) => {
-        if (!cancelled) setUser(data.user);
+
+    refreshSession()
+      .then(({ user: sessionUser }) => {
+        if (!cancelled) setUser(sessionUser);
       })
-      .catch(() => {
-        localStorage.removeItem('tm_token');
-      })
+      .catch(() => clearAccessToken())
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
@@ -31,20 +26,21 @@ export function AuthProvider({ children }) {
 
   const login = useCallback(async (email, password) => {
     const { data } = await api.post('/auth/login', { email, password });
-    localStorage.setItem('tm_token', data.token);
+    setAccessToken(data.accessToken);
     setUser(data.user);
     return data.user;
   }, []);
 
   const register = useCallback(async (name, email, password) => {
     const { data } = await api.post('/auth/register', { name, email, password });
-    localStorage.setItem('tm_token', data.token);
+    setAccessToken(data.accessToken);
     setUser(data.user);
     return data.user;
   }, []);
 
   const logout = useCallback(() => {
-    localStorage.removeItem('tm_token');
+    api.post('/auth/logout').catch(() => {});
+    clearAccessToken();
     setUser(null);
   }, []);
 

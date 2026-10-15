@@ -12,12 +12,13 @@ function check(name, cond, detail = '') {
   }
 }
 
-async function req(method, path, { token, body } = {}) {
+async function req(method, path, { token, cookie, body } = {}) {
   const res = await fetch(`${BASE}${path}`, {
     method,
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(cookie ? { Cookie: cookie } : {}),
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
@@ -27,7 +28,12 @@ async function req(method, path, { token, body } = {}) {
   } catch {
     data = null;
   }
-  return { status: res.status, data };
+  return { status: res.status, data, setCookies: res.headers.getSetCookie() };
+}
+
+function refreshCookie(setCookies) {
+  const header = setCookies.find((c) => c.startsWith('tm_refresh='));
+  return header ? header.split(';')[0] : null;
 }
 
 const stamp = Date.now();
@@ -48,8 +54,16 @@ check('register validation rejects bad input', badReg.status === 400);
 const regA = await req('POST', '/auth/register', {
   body: { name: 'Alice Tester', email: emailA, password: 'password123' },
 });
-check('register user A', regA.status === 201 && Boolean(regA.data.token));
-const tokenA = regA.data.token;
+check('register user A', regA.status === 201 && Boolean(regA.data.accessToken));
+check(
+  'refresh token not exposed in response body',
+  regA.data.refreshToken === undefined && regA.data.token === undefined
+);
+check(
+  'register sets HttpOnly refresh cookie',
+  regA.setCookies.some((c) => c.startsWith('tm_refresh=') && /httponly/i.test(c))
+);
+const tokenA = regA.data.accessToken;
 
 const dup = await req('POST', '/auth/register', {
   body: { name: 'Alice Again', email: emailA, password: 'password123' },
@@ -64,7 +78,7 @@ check('wrong password rejected', badLogin.status === 401);
 const loginA = await req('POST', '/auth/login', {
   body: { email: emailA, password: 'password123' },
 });
-check('login user A', loginA.status === 200 && Boolean(loginA.data.token));
+check('login user A', loginA.status === 200 && Boolean(loginA.data.accessToken));
 
 const meA = await req('GET', '/auth/me', { token: tokenA });
 check('GET /auth/me', meA.status === 200 && meA.data.user.email === emailA);
@@ -72,11 +86,40 @@ check('GET /auth/me', meA.status === 200 && meA.data.user.email === emailA);
 const noAuth = await req('GET', '/tasks');
 check('tasks require auth', noAuth.status === 401);
 
+// Refresh flow: rotation, replay rejection, revocation on logout
+const noCookie = await req('POST', '/auth/refresh');
+check('refresh without cookie rejected', noCookie.status === 401);
+
+const loginCookie = refreshCookie(loginA.setCookies);
+check('login sets refresh cookie', Boolean(loginCookie));
+
+const refreshed = await req('POST', '/auth/refresh', { cookie: loginCookie });
+check(
+  'refresh issues new access token',
+  refreshed.status === 200 && Boolean(refreshed.data.accessToken)
+);
+check('refresh returns the user', refreshed.data.user?.email === emailA);
+
+const refreshedMe = await req('GET', '/auth/me', { token: refreshed.data.accessToken });
+check('refreshed access token authorizes requests', refreshedMe.status === 200);
+
+const rotatedCookie = refreshCookie(refreshed.setCookies);
+check('refresh rotates the cookie', Boolean(rotatedCookie) && rotatedCookie !== loginCookie);
+
+const replay = await req('POST', '/auth/refresh', { cookie: loginCookie });
+check('rotated-out refresh token rejected', replay.status === 401);
+
+const logoutA = await req('POST', '/auth/logout', { cookie: rotatedCookie });
+check('logout succeeds', logoutA.status === 204);
+
+const afterLogout = await req('POST', '/auth/refresh', { cookie: rotatedCookie });
+check('refresh rejected after logout', afterLogout.status === 401);
+
 // Register B
 const regB = await req('POST', '/auth/register', {
   body: { name: 'Bob Tester', email: emailB, password: 'password123' },
 });
-const tokenB = regB.data.token;
+const tokenB = regB.data.accessToken;
 check('register user B', regB.status === 201);
 
 // Categories
