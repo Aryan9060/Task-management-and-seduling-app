@@ -1,12 +1,19 @@
 import { useCallback, useEffect, useState } from 'react';
 import api, { errorMessage } from '../api/client.js';
-import { formatDateTime } from '../utils/datetime.js';
+import { formatDateTime, formatDate } from '../utils/datetime.js';
 
 const STATUS_LABELS = {
   todo: 'To Do',
   in_progress: 'In Progress',
   completed: 'Completed',
   cancelled: 'Cancelled',
+};
+
+const OCCURRENCE_LABELS = {
+  pending: 'Pending',
+  completed: 'Completed',
+  missed: 'Missed',
+  skipped: 'Skipped',
 };
 
 const PRIORITY_LABELS = {
@@ -18,38 +25,71 @@ const PRIORITY_LABELS = {
 
 const ACTIVITY_LABELS = {
   created: 'Created',
+  updated: 'Updated',
   status_changed: 'Status changed',
   priority_changed: 'Priority changed',
   due_at_changed: 'Due date changed',
-  start_at_changed: 'Start date changed',
-  category_changed: 'Category changed',
-  assignee_added: 'Assignee added',
-  assignee_removed: 'Assignee removed',
+  assigned: 'Assignees changed',
   archived: 'Archived',
   restored: 'Restored',
+  subtask_created: 'Subtask created',
+  recurrence_set: 'Recurrence set',
+  recurrence_cleared: 'Recurrence cleared',
+  occurrence_completed: 'Occurrence completed',
+  occurrence_skipped: 'Occurrence skipped',
+  occurrence_reopened: 'Occurrence reopened',
 };
 
 function activityDetail(entry) {
   const fmt = (value) => value ?? '—';
   switch (entry.action) {
     case 'created':
+    case 'subtask_created':
       return entry.newValue ? `“${entry.newValue}”` : '';
-    case 'assignee_added':
-      return fmt(entry.newValue);
-    case 'assignee_removed':
-      return fmt(entry.oldValue);
+    case 'assigned': {
+      try {
+        const ids = JSON.parse(entry.newValue ?? '[]');
+        return `${ids.length} assignee(s)`;
+      } catch {
+        return fmt(entry.newValue);
+      }
+    }
+    case 'occurrence_completed':
+    case 'occurrence_skipped':
+    case 'occurrence_reopened':
+      return entry.newValue ? `on ${formatDate(entry.newValue)}` : '';
+    case 'recurrence_set':
+    case 'recurrence_cleared': {
+      try {
+        return JSON.parse(entry.newValue ?? 'null')?.frequency ?? '';
+      } catch {
+        return '';
+      }
+    }
     case 'status_changed':
       return `${STATUS_LABELS[entry.oldValue] ?? fmt(entry.oldValue)} → ${STATUS_LABELS[entry.newValue] ?? fmt(entry.newValue)}`;
     case 'priority_changed':
       return `${PRIORITY_LABELS[entry.oldValue] ?? fmt(entry.oldValue)} → ${PRIORITY_LABELS[entry.newValue] ?? fmt(entry.newValue)}`;
     case 'due_at_changed':
-    case 'start_at_changed':
       return `${formatDateTime(entry.oldValue)} → ${formatDateTime(entry.newValue)}`;
-    case 'category_changed':
-      return `${fmt(entry.oldValue)} → ${fmt(entry.newValue)}`;
+    case 'updated':
+      return entry.field ? `${entry.field}: ${fmt(entry.oldValue)} → ${fmt(entry.newValue)}` : '';
     default:
       return '';
   }
+}
+
+function formatReminder(minutes) {
+  if (minutes === 0) return 'at due time';
+  if (minutes % 1440 === 0) {
+    const days = minutes / 1440;
+    return `${days} day${days > 1 ? 's' : ''} before`;
+  }
+  if (minutes % 60 === 0) {
+    const hours = minutes / 60;
+    return `${hours} hour${hours > 1 ? 's' : ''} before`;
+  }
+  return `${minutes} min before`;
 }
 
 export default function TaskItem({
@@ -68,27 +108,37 @@ export default function TaskItem({
   const [expanded, setExpanded] = useState(false);
   const [details, setDetails] = useState(null);
   const [activities, setActivities] = useState([]);
+  const [occurrences, setOccurrences] = useState([]);
+  const [comments, setComments] = useState([]);
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [detailError, setDetailError] = useState('');
   const [newSubtaskTitle, setNewSubtaskTitle] = useState('');
+  const [newComment, setNewComment] = useState('');
   const [mutating, setMutating] = useState(false);
 
   const loadDetails = useCallback(async () => {
     setLoadingDetails(true);
     setDetailError('');
     try {
-      const [detailRes, activityRes] = await Promise.all([
+      const requests = [
         api.get(`/tasks/${task.id}`),
         api.get(`/tasks/${task.id}/activities`, { params: { limit: 20 } }),
-      ]);
+        api.get(`/tasks/${task.id}/comments`),
+      ];
+      if (task.isRecurring) {
+        requests.push(api.get(`/tasks/${task.id}/occurrences`));
+      }
+      const [detailRes, activityRes, commentRes, occurrenceRes] = await Promise.all(requests);
       setDetails({ task: detailRes.data.task, subtasks: detailRes.data.subtasks });
       setActivities(activityRes.data.activities);
+      setComments(commentRes.data.comments);
+      setOccurrences(occurrenceRes?.data.occurrences ?? []);
     } catch (err) {
       setDetailError(errorMessage(err, 'Unable to load task details'));
     } finally {
       setLoadingDetails(false);
     }
-  }, [task.id]);
+  }, [task.id, task.isRecurring]);
 
   useEffect(() => {
     if (expanded) loadDetails();
@@ -130,6 +180,28 @@ export default function TaskItem({
   const archiveSubtask = (subtask) =>
     withReload(() => api.delete(`/tasks/${subtask.id}`), 'Unable to archive the subtask');
 
+  const setOccurrenceStatus = (occurrence, status) =>
+    withReload(
+      () => api.patch(`/occurrences/${occurrence.id}`, { status }),
+      'Unable to update the occurrence'
+    );
+
+  const postComment = (event) => {
+    event.preventDefault();
+    const body = newComment.trim();
+    if (!body) return;
+    withReload(async () => {
+      await api.post(`/tasks/${task.id}/comments`, { body });
+      setNewComment('');
+    }, 'Unable to post the comment');
+  };
+
+  const deleteComment = (comment) =>
+    withReload(
+      () => api.delete(`/tasks/${task.id}/comments/${comment.id}`),
+      'Unable to delete the comment'
+    );
+
   const detailsTask = details?.task ?? task;
   const detailProgress = detailsTask.subtaskProgress ?? progress;
   const percent =
@@ -145,6 +217,11 @@ export default function TaskItem({
         <div className="task-title-row">
           <h3 className={task.status === 'completed' ? 'task-title-done' : ''}>{task.title}</h3>
           {task.isOverdue && <span className="badge badge-overdue">Overdue</span>}
+          {task.isRecurring && (
+            <span className="badge badge-recurring">
+              Repeats {task.recurrenceRule?.frequency ?? ''}
+            </span>
+          )}
           {progress.total > 0 && (
             <span className="badge badge-subtasks">
               {progress.completed}/{progress.total} subtasks
@@ -168,6 +245,11 @@ export default function TaskItem({
             </span>
           )}
           <span className="task-meta-text">Due: {formatDateTime(task.dueAt)}</span>
+          {task.reminderMinutesBefore != null && (
+            <span className="badge badge-reminder">
+              Reminder {formatReminder(task.reminderMinutesBefore)}
+            </span>
+          )}
           {task.estimatedDurationMinutes != null && (
             <span className="task-meta-text">{task.estimatedDurationMinutes} min</span>
           )}
@@ -302,6 +384,117 @@ export default function TaskItem({
                       disabled={mutating || !newSubtaskTitle.trim()}
                     >
                       Add
+                    </button>
+                  </form>
+                )}
+              </section>
+
+              {detailsTask.isRecurring && (
+                <section className="details-section">
+                  <div className="details-heading">
+                    <h4>Occurrences</h4>
+                    <span className="task-meta-text">last 7 days through next 60</span>
+                  </div>
+                  {occurrences.length === 0 ? (
+                    <p className="task-meta-text">No occurrences in this window.</p>
+                  ) : (
+                    <ul className="occurrence-list">
+                      {occurrences.map((occurrence) => (
+                        <li key={occurrence.id} className="occurrence-row">
+                          <span className="occurrence-date">
+                            {formatDate(occurrence.scheduledFor)}
+                          </span>
+                          <span
+                            className={`badge badge-occurrence badge-occurrence-${occurrence.status}`}
+                          >
+                            {OCCURRENCE_LABELS[occurrence.status] ?? occurrence.status}
+                          </span>
+                          <span className="occurrence-actions">
+                            {['pending', 'missed'].includes(occurrence.status) && (
+                              <>
+                                <button
+                                  type="button"
+                                  className="btn btn-ghost btn-small"
+                                  disabled={mutating || archived}
+                                  onClick={() => setOccurrenceStatus(occurrence, 'completed')}
+                                >
+                                  Complete
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn btn-ghost btn-small"
+                                  disabled={mutating || archived}
+                                  onClick={() => setOccurrenceStatus(occurrence, 'skipped')}
+                                >
+                                  Skip
+                                </button>
+                              </>
+                            )}
+                            {['completed', 'skipped'].includes(occurrence.status) && (
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-small"
+                                disabled={mutating || archived}
+                                onClick={() => setOccurrenceStatus(occurrence, 'pending')}
+                              >
+                                Reopen
+                              </button>
+                            )}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
+              )}
+
+              <section className="details-section">
+                <div className="details-heading">
+                  <h4>Comments</h4>
+                </div>
+                {comments.length === 0 ? (
+                  <p className="task-meta-text">No comments yet.</p>
+                ) : (
+                  <ul className="comment-list">
+                    {comments.map((comment) => (
+                      <li key={comment.id} className="comment-item">
+                        <div className="comment-head">
+                          <span className="comment-author">{comment.author?.name ?? 'Unknown'}</span>
+                          <span className="comment-meta">{formatDateTime(comment.createdAt)}</span>
+                          {comment.canDelete && (
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-danger-text btn-small"
+                              disabled={mutating}
+                              onClick={() => deleteComment(comment)}
+                            >
+                              Delete
+                            </button>
+                          )}
+                        </div>
+                        <p className="comment-body">{comment.body}</p>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {archived ? (
+                  <p className="task-meta-text">Archived tasks are read-only.</p>
+                ) : (
+                  <form className="comment-form" onSubmit={postComment}>
+                    <textarea
+                      className="input"
+                      rows={2}
+                      maxLength={1000}
+                      placeholder="Write a comment..."
+                      value={newComment}
+                      onChange={(e) => setNewComment(e.target.value)}
+                    />
+                    <button
+                      type="submit"
+                      className="btn btn-primary btn-small"
+                      disabled={mutating || !newComment.trim()}
+                    >
+                      Comment
                     </button>
                   </form>
                 )}

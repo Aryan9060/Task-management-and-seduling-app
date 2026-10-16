@@ -30,13 +30,16 @@ const taskSchema = new mongoose.Schema(
     startAt: { type: Date, default: null },
     dueAt: { type: Date, default: null },
     estimatedDurationMinutes: { type: Number, min: 0, default: null },
+    // Minutes before dueAt to alert the owner and assignees; null = no reminder.
+    reminderMinutesBefore: { type: Number, min: 0, max: 10080, default: null },
     completedAt: { type: Date, default: null },
     isArchived: { type: Boolean, default: false },
-    parentTaskId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Task',
-      default: null,
-      index: true,
+    recurrenceRule: {
+      frequency: { type: String, enum: ['daily', 'weekly', 'monthly'] },
+      interval: { type: Number, min: 1, max: 365, default: 1 },
+      byWeekday: [{ type: Number, min: 0, max: 6 }],
+      until: { type: Date, default: null },
+      timeZone: { type: String, default: 'UTC' },
     },
   },
   { timestamps: true }

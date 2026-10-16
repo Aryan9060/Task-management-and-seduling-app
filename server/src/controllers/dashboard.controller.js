@@ -1,12 +1,10 @@
 import mongoose from 'mongoose';
 import Task from '../models/Task.js';
+import TaskOccurrence from '../models/TaskOccurrence.js';
 import asyncHandler from '../utils/asyncHandler.js';
+import { startOfUtcDay } from '../utils/recurrence.js';
 
 const TREND_DAYS = 7;
-
-function startOfUtcDay(date) {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
-}
 
 function endOfUtcDay(date) {
   return new Date(startOfUtcDay(date).getTime() + 24 * 60 * 60 * 1000 - 1);
@@ -71,6 +69,24 @@ export const getSummary = asyncHandler(async (req, res) => {
   const active = total - cancelled;
   const completionRate = active > 0 ? Math.round((completed / active) * 100) : 0;
 
+  // Missed recurring-work count: occurrences marked missed plus pending ones
+  // whose scheduled day has already elapsed (same rule as the occurrence sweep,
+  // evaluated here without mutating so the dashboard stays a read-only view).
+  const recurringIds = await Task.distinct('_id', {
+    ...base,
+    recurrenceRule: { $ne: null },
+  });
+  const missedOccurrences =
+    recurringIds.length > 0
+      ? await TaskOccurrence.countDocuments({
+          taskId: { $in: recurringIds },
+          $or: [
+            { status: 'missed' },
+            { status: 'pending', scheduledFor: { $lt: startOfUtcDay() } },
+          ],
+        })
+      : 0;
+
   res.json({
     summary: {
       total,
@@ -80,6 +96,7 @@ export const getSummary = asyncHandler(async (req, res) => {
       cancelled,
       overdue,
       dueToday,
+      missedOccurrences,
       completionRate,
       trend,
     },

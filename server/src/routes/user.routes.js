@@ -6,6 +6,6 @@ const router = Router();
 
 router.use(requireAuth);
 
-router.get('/search', searchUsers);
+router.get('/', searchUsers);
 
 export default router;

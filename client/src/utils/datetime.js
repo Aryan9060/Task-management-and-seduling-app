@@ -48,6 +48,29 @@ export function formatDateTime(iso) {
 }
 
 /**
+ * Formats an ISO timestamp as a date only, in the user's locale and timezone.
+ *
+ * @param {string|null|undefined} iso - ISO timestamp.
+ * @returns {string} Human-readable date, or an em dash when iso is falsy.
+ */
+export function formatDate(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleDateString(undefined, { dateStyle: 'medium' });
+}
+
+/**
+ * Converts an ISO timestamp into a "YYYY-MM-DD" value for <input type="date">.
+ * Uses UTC components because occurrence/rule days are UTC days server-side.
+ *
+ * @param {string|null|undefined} iso - ISO timestamp.
+ * @returns {string} Date string, or '' when iso is falsy.
+ */
+export function toDateInput(iso) {
+  if (!iso) return '';
+  return new Date(iso).toISOString().slice(0, 10);
+}
+
+/**
  * Returns the short weekday name (e.g. "Wed") for a "YYYY-MM-DD" date string.
  * Built with local-time components so the day does not shift across timezones.
  *

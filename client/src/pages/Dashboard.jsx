@@ -87,6 +87,9 @@ export default function Dashboard() {
         <SummaryCard label="Completed" value={summary.completed} tone="success" />
         <SummaryCard label="Overdue" value={summary.overdue} tone="danger" />
         <SummaryCard label="Due today" value={summary.dueToday} tone="warning" />
+        {summary.missedOccurrences > 0 && (
+          <SummaryCard label="Missed occurrences" value={summary.missedOccurrences} tone="danger" />
+        )}
       </div>
 
       <div className="dashboard-grid">

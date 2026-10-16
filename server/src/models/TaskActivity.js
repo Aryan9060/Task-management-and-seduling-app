@@ -4,11 +4,17 @@ export const ACTIVITY_ACTIONS = [
   'created',
   'updated',
   'status_changed',
-  'deadline_changed',
+  'priority_changed',
+  'due_at_changed',
   'archived',
   'restored',
   'assigned',
   'subtask_created',
+  'recurrence_set',
+  'recurrence_cleared',
+  'occurrence_completed',
+  'occurrence_skipped',
+  'occurrence_reopened',
 ];
 
 const taskActivitySchema = new mongoose.Schema(

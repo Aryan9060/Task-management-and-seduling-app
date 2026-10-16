@@ -461,3 +461,600 @@ check(
   dashD.status === 200 && dashD.data.summary.total === 1 && dashD.data.summary.inProgress === 1
 );
 
+
+// Phase 2b: scope filter and assignee removal
+const regScoped = await req('POST', '/auth/register', {
+  body: { name: 'Frank Scoped', email: `frank.${stamp}@example.com`, password: 'password123' },
+});
+const tokenScoped = regScoped.data.accessToken;
+const userScoped = regScoped.data.user;
+
+const fTask = await req('POST', '/tasks', {
+  token: tokenD,
+  body: { title: 'Scoped task', assigneeIds: [userScoped.id] },
+});
+check('setup scoped task', fTask.status === 201);
+const fTaskId = fTask.data.task.id;
+
+const fAssigned = await req('GET', '/tasks?scope=assigned', { token: tokenScoped });
+check('scope=assigned lists task', fAssigned.data.tasks.some((t) => t.id === fTaskId));
+
+const fOwned = await req('GET', '/tasks?scope=owned', { token: tokenScoped });
+check('scope=owned excludes assigned-only task', !fOwned.data.tasks.some((t) => t.id === fTaskId));
+
+const dOwnedList = await req('GET', '/tasks?scope=owned', { token: tokenD });
+check('scope=owned lists owned task', dOwnedList.data.tasks.some((t) => t.id === fTaskId));
+
+const badScope = await req('GET', '/tasks?scope=bogus', { token: tokenD });
+check('invalid scope rejected', badScope.status === 400);
+
+const dropF = await req('DELETE', `/tasks/${fTaskId}/assignees/${userScoped.id}`, { token: tokenD });
+check('remove assignee', dropF.status === 200 && dropF.data.task.assignees.length === 0);
+
+const fAfterDrop = await req('GET', `/tasks/${fTaskId}`, { token: tokenScoped });
+check('removed assignee loses access', fAfterDrop.status === 404);
+
+const dropAgain = await req('DELETE', `/tasks/${fTaskId}/assignees/${userScoped.id}`, { token: tokenD });
+check('removing missing assignee is 404', dropAgain.status === 404);
+
+// Phase 3: recurrence rules and per-occurrence tracking
+const dayMs = 24 * 60 * 60 * 1000;
+const todayStr = new Date().toISOString().slice(0, 10);
+function utcDayStr(offsetDays) {
+  return new Date(Date.parse(todayStr) + offsetDays * dayMs).toISOString().slice(0, 10);
+}
+function occOn(occurrences, dayStr) {
+  return occurrences.find((o) => String(o.scheduledFor).slice(0, 10) === dayStr);
+}
+
+const regG = await req('POST', '/auth/register', {
+  body: { name: 'Gina Recurring', email: `gina.${stamp}@example.com`, password: 'password123' },
+});
+const tokenG = regG.data.accessToken;
+check('register user G (recurring owner)', regG.status === 201);
+
+// Daily rule: create, occurrence generation, per-occurrence completion
+const r1Res = await req('POST', '/tasks', {
+  token: tokenG,
+  body: {
+    title: 'Practice JavaScript',
+    recurrenceRule: { frequency: 'daily', interval: 1 },
+  },
+});
+check(
+  'create daily recurring task',
+  r1Res.status === 201 &&
+    r1Res.data.task.isRecurring === true &&
+    r1Res.data.task.recurrenceRule?.frequency === 'daily'
+);
+const r1Id = r1Res.data.task.id;
+
+const r1Occ = await req('GET', `/tasks/${r1Id}/occurrences`, { token: tokenG });
+check(
+  'occurrences generated around today',
+  r1Occ.status === 200 &&
+    Boolean(occOn(r1Occ.data.occurrences, todayStr)) &&
+    Boolean(occOn(r1Occ.data.occurrences, utcDayStr(1)))
+);
+const r1Today = occOn(r1Occ.data.occurrences, todayStr);
+
+const completeToday = await req('PATCH', `/occurrences/${r1Today.id}`, {
+  token: tokenG,
+  body: { status: 'completed' },
+});
+check(
+  'complete today occurrence',
+  completeToday.status === 200 &&
+    completeToday.data.occurrence.status === 'completed' &&
+    Boolean(completeToday.data.occurrence.completedAt)
+);
+
+const r1AfterComplete = await req('GET', `/tasks/${r1Id}`, { token: tokenG });
+check(
+  'completing occurrence does not complete the task',
+  r1AfterComplete.data.task.status === 'todo'
+);
+
+const r1Occ2 = await req('GET', `/tasks/${r1Id}/occurrences`, { token: tokenG });
+check(
+  'next occurrence stays pending',
+  occOn(r1Occ2.data.occurrences, utcDayStr(1))?.status === 'pending'
+);
+
+const reopenToday = await req('PATCH', `/occurrences/${r1Today.id}`, {
+  token: tokenG,
+  body: { status: 'pending' },
+});
+check(
+  'reopen completed occurrence',
+  reopenToday.status === 200 &&
+    reopenToday.data.occurrence.status === 'pending' &&
+    reopenToday.data.occurrence.completedAt === null
+);
+
+const skipTomorrow = await req('PATCH', `/occurrences/${occOn(r1Occ2.data.occurrences, utcDayStr(1)).id}`, {
+  token: tokenG,
+  body: { status: 'skipped' },
+});
+check('skip future occurrence', skipTomorrow.status === 200 && skipTomorrow.data.occurrence.status === 'skipped');
+
+const unskipTomorrow = await req('PATCH', `/occurrences/${occOn(r1Occ2.data.occurrences, utcDayStr(1)).id}`, {
+  token: tokenG,
+  body: { status: 'pending' },
+});
+check('unskip occurrence', unskipTomorrow.status === 200 && unskipTomorrow.data.occurrence.status === 'pending');
+
+// Missed sweep: task anchored 5 days in the past
+const r2Res = await req('POST', '/tasks', {
+  token: tokenG,
+  body: {
+    title: 'Morning run',
+    startAt: new Date(Date.parse(todayStr) - 5 * dayMs).toISOString(),
+    recurrenceRule: { frequency: 'daily' },
+  },
+});
+const r2Id = r2Res.data.task.id;
+const r2Occ = await req('GET', `/tasks/${r2Id}/occurrences`, { token: tokenG });
+const r2Missed = r2Occ.data.occurrences.filter((o) => o.status === 'missed');
+check(
+  'past pending occurrences marked missed',
+  r2Missed.length === 5 && occOn(r2Occ.data.occurrences, todayStr)?.status === 'pending'
+);
+
+const lateComplete = await req('PATCH', `/occurrences/${occOn(r2Occ.data.occurrences, utcDayStr(-2)).id}`, {
+  token: tokenG,
+  body: { status: 'completed' },
+});
+check(
+  'late completion of missed occurrence',
+  lateComplete.status === 200 && lateComplete.data.occurrence.status === 'completed'
+);
+
+const reopenMissed = await req('PATCH', `/occurrences/${occOn(r2Occ.data.occurrences, utcDayStr(-1)).id}`, {
+  token: tokenG,
+  body: { status: 'pending' },
+});
+check('missed occurrence cannot be reopened', reopenMissed.status === 400);
+
+const gDash = await req('GET', '/dashboard/summary', { token: tokenG });
+check(
+  'dashboard reports missed occurrences',
+  gDash.status === 200 && gDash.data.summary.missedOccurrences === 4
+);
+
+// Weekly rule semantics
+const r3Res = await req('POST', '/tasks', {
+  token: tokenG,
+  body: {
+    title: 'Gym with coach',
+    recurrenceRule: { frequency: 'weekly', byWeekday: [1, 3] },
+  },
+});
+check('create weekly recurring task', r3Res.status === 201);
+const r3Occ = await req('GET', `/tasks/${r3Res.data.task.id}/occurrences`, { token: tokenG });
+const r3Days = r3Occ.data.occurrences.map((o) => new Date(o.scheduledFor).getUTCDay());
+check(
+  'weekly occurrences land only on chosen weekdays',
+  r3Occ.data.occurrences.length >= 8 && r3Days.every((d) => d === 1 || d === 3)
+);
+
+const weeklyNoDays = await req('POST', '/tasks', {
+  token: tokenG,
+  body: { title: 'Broken weekly', recurrenceRule: { frequency: 'weekly' } },
+});
+check('weekly rule requires byWeekday', weeklyNoDays.status === 400);
+
+const badFreq = await req('POST', '/tasks', {
+  token: tokenG,
+  body: { title: 'Broken rule', recurrenceRule: { frequency: 'hourly' } },
+});
+check('invalid frequency rejected', badFreq.status === 400);
+
+// until caps expansion
+const r4Res = await req('POST', '/tasks', {
+  token: tokenG,
+  body: {
+    title: 'Short streak',
+    recurrenceRule: { frequency: 'daily', until: utcDayStr(3) },
+  },
+});
+const r4Occ = await req('GET', `/tasks/${r4Res.data.task.id}/occurrences`, { token: tokenG });
+check('until caps occurrence count', r4Occ.data.occurrences.length === 4);
+
+// Sharing: assignee can complete occurrences but not change the rule
+const r5Res = await req('POST', '/tasks', {
+  token: tokenG,
+  body: {
+    title: 'Team standup prep',
+    assigneeIds: [userIdC],
+    recurrenceRule: { frequency: 'daily' },
+  },
+});
+const r5Id = r5Res.data.task.id;
+const r5Occ = await req('GET', `/tasks/${r5Id}/occurrences`, { token: tokenG });
+const cCompletes = await req('PATCH', `/occurrences/${occOn(r5Occ.data.occurrences, todayStr).id}`, {
+  token: tokenC,
+  body: { status: 'completed' },
+});
+check('assignee can complete an occurrence', cCompletes.status === 200);
+
+const cRuleChange = await req('PATCH', `/tasks/${r5Id}`, {
+  token: tokenC,
+  body: { recurrenceRule: null },
+});
+check('assignee cannot change recurrence rule', cRuleChange.status === 403);
+
+const bSeesOcc = await req('GET', `/tasks/${r5Id}/occurrences`, { token: tokenB });
+check('outsider cannot list occurrences', bSeesOcc.status === 404);
+
+const bPatchesOcc = await req('PATCH', `/occurrences/${occOn(r5Occ.data.occurrences, utcDayStr(1)).id}`, {
+  token: tokenB,
+  body: { status: 'completed' },
+});
+check('outsider cannot update occurrence', bPatchesOcc.status === 404);
+
+// Idempotent manual occurrence creation
+const manual1 = await req('POST', `/tasks/${r1Id}/occurrences`, {
+  token: tokenG,
+  body: { scheduledFor: utcDayStr(100) },
+});
+const manual2 = await req('POST', `/tasks/${r1Id}/occurrences`, {
+  token: tokenG,
+  body: { scheduledFor: utcDayStr(100) },
+});
+check(
+  'manual occurrence creation is idempotent',
+  manual1.status === 201 && manual2.status === 200 && manual1.data.occurrence.id === manual2.data.occurrence.id
+);
+
+const noDateOcc = await req('POST', `/tasks/${r1Id}/occurrences`, { token: tokenG, body: {} });
+check('manual occurrence requires scheduledFor', noDateOcc.status === 400);
+
+// Rule change rebuilds the future, keeps history
+const reshape = await req('PATCH', `/tasks/${r2Id}`, {
+  token: tokenG,
+  body: { recurrenceRule: { frequency: 'weekly', byWeekday: [2] } },
+});
+check('owner can change recurrence rule', reshape.status === 200 && reshape.data.task.recurrenceRule.frequency === 'weekly');
+
+const r2Reshaped = await req('GET', `/tasks/${r2Id}/occurrences`, { token: tokenG });
+const r2Future = r2Reshaped.data.occurrences.filter((o) => String(o.scheduledFor).slice(0, 10) >= todayStr);
+check(
+  'future occurrences follow the new rule',
+  r2Future.length > 0 && r2Future.every((o) => new Date(o.scheduledFor).getUTCDay() === 2)
+);
+check(
+  'past occurrence history survives rule change',
+  occOn(r2Reshaped.data.occurrences, utcDayStr(-2))?.status === 'completed'
+);
+
+// Clearing the rule removes recurrence but keeps completed history
+const clearRule = await req('PATCH', `/tasks/${r2Id}`, {
+  token: tokenG,
+  body: { recurrenceRule: null },
+});
+check('clear recurrence rule', clearRule.status === 200 && clearRule.data.task.isRecurring === false);
+
+const r2Cleared = await req('GET', `/tasks/${r2Id}/occurrences`, { token: tokenG });
+check('cleared rule lists no occurrences', r2Cleared.status === 200 && r2Cleared.data.occurrences.length === 0);
+
+const restoreRule = await req('PATCH', `/tasks/${r2Id}`, {
+  token: tokenG,
+  body: { recurrenceRule: { frequency: 'daily' } },
+});
+const r2Restored = await req('GET', `/tasks/${r2Id}/occurrences`, { token: tokenG });
+check(
+  'completed history survives clear and restore',
+  restoreRule.status === 200 &&
+    occOn(r2Restored.data.occurrences, utcDayStr(-2))?.status === 'completed'
+);
+
+// Subtasks cannot be recurring
+const recSubtask = await req('POST', `/tasks/${r1Id}/subtasks`, {
+  token: tokenG,
+  body: { title: 'Nope', recurrenceRule: { frequency: 'daily' } },
+});
+check('subtask cannot be recurring', recSubtask.status === 400);
+
+// Phase 5: comments, notifications, reminders, team permissions
+const emailE = `erin.${stamp}@example.com`;
+const emailF = `frank.p5.${stamp}@example.com`;
+
+const regE = await req('POST', '/auth/register', {
+  body: { name: 'Erin Owner', email: emailE, password: 'password123' },
+});
+const tokenE = regE.data.accessToken;
+check('register user E (owner)', regE.status === 201);
+
+const regF = await req('POST', '/auth/register', {
+  body: { name: 'Frank Assignee', email: emailF, password: 'password123' },
+});
+const tokenF = regF.data.accessToken;
+const userIdF = regF.data.user.id;
+check('register user F (assignee)', regF.status === 201);
+
+// Assignment notifications
+const t5Res = await req('POST', '/tasks', {
+  token: tokenE,
+  body: { title: 'Ship the team workflow', assigneeIds: [userIdF] },
+});
+const t5Id = t5Res.data.task.id;
+check('create task for team workflow', t5Res.status === 201);
+
+const fNotifs1 = await req('GET', '/notifications', { token: tokenF });
+const assignedNotif = fNotifs1.data.notifications.find(
+  (n) => n.type === 'assigned' && n.task?.id === t5Id
+);
+check('assignee notified about assignment', fNotifs1.status === 200 && Boolean(assignedNotif));
+check('assignment notification starts unread', assignedNotif?.readAt === null);
+
+const fNotifs2 = await req('GET', '/notifications', { token: tokenF });
+check(
+  'assignment notification is not duplicated by repeated reads',
+  fNotifs2.data.notifications.filter((n) => n.type === 'assigned' && n.task?.id === t5Id).length === 1
+);
+
+const eNotifs1 = await req('GET', '/notifications', { token: tokenE });
+check(
+  'owner is not notified about their own assignment action',
+  !eNotifs1.data.notifications.some((n) => n.type === 'assigned' && n.task?.id === t5Id)
+);
+
+// Mark-read flow
+const markRead = await req('PATCH', `/notifications/${assignedNotif.id}/read`, { token: tokenF });
+check('mark notification read', markRead.status === 200 && Boolean(markRead.data.notification.readAt));
+
+const markReadAgain = await req('PATCH', `/notifications/${assignedNotif.id}/read`, { token: tokenF });
+check(
+  're-reading keeps the original readAt',
+  markReadAgain.status === 200 &&
+    markReadAgain.data.notification.readAt === markRead.data.notification.readAt
+);
+
+const eReadsF = await req('PATCH', `/notifications/${assignedNotif.id}/read`, { token: tokenE });
+check('cannot read another user notification', eReadsF.status === 404);
+
+const bogusRead = await req('PATCH', '/notifications/not-an-id/read', { token: tokenF });
+check('invalid notification id rejected', bogusRead.status === 404);
+
+// Reminder before due date (offset already elapsed, task not yet overdue)
+const remTaskRes = await req('POST', '/tasks', {
+  token: tokenE,
+  body: {
+    title: 'Reminder fires',
+    dueAt: new Date(Date.now() + 30 * 60000).toISOString(),
+    reminderMinutesBefore: 60,
+    assigneeIds: [userIdF],
+  },
+});
+const remTaskId = remTaskRes.data.task.id;
+check(
+  'reminder stored on task',
+  remTaskRes.status === 201 && remTaskRes.data.task.reminderMinutesBefore === 60
+);
+
+const eNotifs2 = await req('GET', '/notifications', { token: tokenE });
+check(
+  'due reminder materializes on read',
+  eNotifs2.data.notifications.some((n) => n.type === 'reminder' && n.task?.id === remTaskId)
+);
+
+const fNotifs3 = await req('GET', '/notifications', { token: tokenF });
+check(
+  'assignees get the reminder too',
+  fNotifs3.data.notifications.some((n) => n.type === 'reminder' && n.task?.id === remTaskId)
+);
+check(
+  'task not flagged overdue before its due time',
+  !fNotifs3.data.notifications.some((n) => n.type === 'overdue' && n.task?.id === remTaskId)
+);
+
+const eNotifs3 = await req('GET', '/notifications', { token: tokenE });
+check(
+  'reminder sweep is idempotent',
+  eNotifs3.data.notifications.filter((n) => n.type === 'reminder' && n.task?.id === remTaskId).length === 1
+);
+
+// Overdue alert (reminder offset also elapsed, but overdue supersedes it)
+const overRes = await req('POST', '/tasks', {
+  token: tokenE,
+  body: {
+    title: 'Long overdue',
+    dueAt: new Date(Date.now() - 2 * 3600000).toISOString(),
+    reminderMinutesBefore: 30,
+    assigneeIds: [userIdF],
+  },
+});
+const overId = overRes.data.task.id;
+const eNotifs4 = await req('GET', '/notifications', { token: tokenE });
+check(
+  'overdue alert materializes',
+  eNotifs4.data.notifications.some((n) => n.type === 'overdue' && n.task?.id === overId)
+);
+check(
+  'overdue supersedes the reminder',
+  !eNotifs4.data.notifications.some((n) => n.type === 'reminder' && n.task?.id === overId)
+);
+
+// Moving the schedule retires stale unread reminders and does not pre-fire the new one
+const moved = await req('PATCH', `/tasks/${remTaskId}`, {
+  token: tokenE,
+  body: { dueAt: new Date(Date.now() + 5 * 86400000).toISOString() },
+});
+const eNotifs5 = await req('GET', '/notifications', { token: tokenE });
+check(
+  'schedule change retires the stale unread reminder',
+  moved.status === 200 &&
+    !eNotifs5.data.notifications.some((n) => n.type === 'reminder' && n.task?.id === remTaskId)
+);
+
+// Reminder validation and permissions
+const noDueReminder = await req('POST', '/tasks', {
+  token: tokenE,
+  body: { title: 'Reminder without due', reminderMinutesBefore: 60 },
+});
+check('reminder requires a due date', noDueReminder.status === 400);
+
+const bigOffset = await req('POST', '/tasks', {
+  token: tokenE,
+  body: {
+    title: 'Huge offset',
+    dueAt: new Date(Date.now() + 86400000).toISOString(),
+    reminderMinutesBefore: 999999,
+  },
+});
+check('reminder offset is bounded', bigOffset.status === 400);
+
+const assigneeReminder = await req('PATCH', `/tasks/${t5Id}`, {
+  token: tokenF,
+  body: { reminderMinutesBefore: 60 },
+});
+check('assignee cannot set reminders', assigneeReminder.status === 403);
+
+const clearDue = await req('PATCH', `/tasks/${remTaskId}`, {
+  token: tokenE,
+  body: { dueAt: null },
+});
+check(
+  'clearing dueAt clears the reminder',
+  clearDue.status === 200 && clearDue.data.task.reminderMinutesBefore === null
+);
+
+// Comments: CRUD + permissions
+const noAuthComments = await req('GET', `/tasks/${t5Id}/comments`);
+check('comments require auth', noAuthComments.status === 401);
+
+const emptyComment = await req('POST', `/tasks/${t5Id}/comments`, { token: tokenF, body: {} });
+check('empty comment rejected', emptyComment.status === 400);
+
+const longComment = await req('POST', `/tasks/${t5Id}/comments`, {
+  token: tokenF,
+  body: { body: 'x'.repeat(1001) },
+});
+check('over-long comment rejected', longComment.status === 400);
+
+const fComment = await req('POST', `/tasks/${t5Id}/comments`, {
+  token: tokenF,
+  body: { body: 'Kickoff done, starting on the API.' },
+});
+check(
+  'assignee can comment',
+  fComment.status === 201 && fComment.data.comment.author.name === 'Frank Assignee'
+);
+const fCommentId = fComment.data.comment.id;
+check('author may delete own comment', fComment.data.comment.canDelete === true);
+
+const eComment = await req('POST', `/tasks/${t5Id}/comments`, {
+  token: tokenE,
+  body: { body: 'Great, ping me for review.' },
+});
+check('owner can comment', eComment.status === 201);
+const eCommentId = eComment.data.comment.id;
+
+const bReadsComments = await req('GET', `/tasks/${t5Id}/comments`, { token: tokenB });
+check('outsider cannot read comments', bReadsComments.status === 404);
+
+const bPostsComment = await req('POST', `/tasks/${t5Id}/comments`, {
+  token: tokenB,
+  body: { body: 'hello' },
+});
+check('outsider cannot comment', bPostsComment.status === 404);
+
+const fListComments = await req('GET', `/tasks/${t5Id}/comments`, { token: tokenF });
+check(
+  'comments listed oldest first for assignees',
+  fListComments.status === 200 &&
+    fListComments.data.comments.length === 2 &&
+    fListComments.data.comments[0].id === fCommentId
+);
+check(
+  'non-author cannot delete the owner comment',
+  fListComments.data.comments[1].id === eCommentId &&
+    fListComments.data.comments[1].canDelete === false
+);
+
+const ownerDeletesF = await req('DELETE', `/tasks/${t5Id}/comments/${fCommentId}`, { token: tokenE });
+check('owner can delete an assignee comment', ownerDeletesF.status === 204);
+
+const fDeletesOwner = await req('DELETE', `/tasks/${t5Id}/comments/${eCommentId}`, { token: tokenF });
+check('assignee cannot delete the owner comment', fDeletesOwner.status === 403);
+
+const fComment2 = await req('POST', `/tasks/${t5Id}/comments`, {
+  token: tokenF,
+  body: { body: 'One more thought, then done.' },
+});
+const fDeletesOwn = await req('DELETE', `/tasks/${t5Id}/comments/${fComment2.data.comment.id}`, {
+  token: tokenF,
+});
+check('author can delete own comment', fDeletesOwn.status === 204);
+
+// Comment notifications: recipients exclude the author, deleted comments clean up
+const eNotifs6 = await req('GET', '/notifications', { token: tokenE });
+check(
+  'deleted comments leave no notifications behind',
+  !eNotifs6.data.notifications.some((n) => n.type === 'comment' && n.task?.id === t5Id)
+);
+
+const fNotifs4 = await req('GET', '/notifications', { token: tokenF });
+const fCommentNotifs = fNotifs4.data.notifications.filter(
+  (n) => n.type === 'comment' && n.task?.id === t5Id
+);
+check(
+  'assignee notified exactly once about the owner comment',
+  fCommentNotifs.length === 1 && fCommentNotifs[0].readAt === null
+);
+
+// Read-all
+const readAll = await req('POST', '/notifications/read-all', { token: tokenF });
+check('mark all read', readAll.status === 200 && readAll.data.updated >= 1);
+const fNotifs5 = await req('GET', '/notifications', { token: tokenF });
+check('unread count is zero after read-all', fNotifs5.data.unreadCount === 0);
+
+// Editing assignees through PATCH (the task form path) changes membership and notifies new assignees
+const regH = await req('POST', '/auth/register', {
+  body: { name: 'Henry Newcomer', email: `henry.${stamp}@example.com`, password: 'password123' },
+});
+const tokenH = regH.data.accessToken;
+const userIdH = regH.data.user.id;
+
+const reassign = await req('PATCH', `/tasks/${t5Id}`, {
+  token: tokenE,
+  body: { assigneeIds: [userIdF, userIdH] },
+});
+check(
+  'owner can edit assignees via PATCH',
+  reassign.status === 200 &&
+    reassign.data.task.assignees.length === 2 &&
+    reassign.data.task.assignees.some((a) => a.id === userIdH)
+);
+
+const hNotifs = await req('GET', '/notifications', { token: tokenH });
+check(
+  'newly added assignee is notified',
+  hNotifs.data.notifications.some((n) => n.type === 'assigned' && n.task?.id === t5Id)
+);
+
+const fNotifs6 = await req('GET', '/notifications', { token: tokenF });
+check(
+  'existing assignee is not re-notified',
+  fNotifs6.data.notifications.filter((n) => n.type === 'assigned' && n.task?.id === t5Id).length === 1
+);
+
+const removeH = await req('DELETE', `/tasks/${t5Id}/assignees/${userIdH}`, { token: tokenE });
+check(
+  'owner can remove an assignee',
+  removeH.status === 200 && removeH.data.task.assignees.length === 1
+);
+
+// Archived tasks are read-only for comments
+const archTask = await req('POST', '/tasks', { token: tokenE, body: { title: 'Archive me' } });
+const archId = archTask.data.task.id;
+await req('DELETE', `/tasks/${archId}`, { token: tokenE });
+const archComment = await req('POST', `/tasks/${archId}/comments`, {
+  token: tokenE,
+  body: { body: 'too late' },
+});
+check('cannot comment on an archived task', archComment.status === 400);
+
+console.log(`\n${passed} passed, ${failed} failed`);
+process.exit(failed > 0 ? 1 : 0);

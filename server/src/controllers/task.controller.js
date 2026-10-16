@@ -1,10 +1,24 @@
 import mongoose from 'mongoose';
 import Task, { TASK_STATUSES, TASK_PRIORITIES } from '../models/Task.js';
 import TaskActivity from '../models/TaskActivity.js';
+import TaskOccurrence from '../models/TaskOccurrence.js';
 import Category from '../models/Category.js';
 import User from '../models/User.js';
 import HttpError from '../utils/httpError.js';
 import asyncHandler from '../utils/asyncHandler.js';
+import {
+  HORIZON_DAYS,
+  addUtcDays,
+  ensureOccurrences,
+  parseRecurrenceRule,
+  startOfUtcDay,
+  sweepMissed,
+} from '../utils/recurrence.js';
+import {
+  MAX_REMINDER_MINUTES,
+  clearStaleAlerts,
+  notifyAssignees,
+} from '../utils/notifications.js';
 
 const MAX_LIMIT = 100;
 const MAX_ASSIGNEES = 20;
@@ -20,7 +34,7 @@ const SORT_MAP = {
   '-title': { title: -1 },
 };
 
-function isOwner(userId, task) {
+export function isOwner(userId, task) {
   return String(task.ownerId) === String(userId);
 }
 
@@ -55,12 +69,28 @@ function serializeTask(task, viewerId) {
     startAt: t.startAt,
     dueAt: t.dueAt,
     estimatedDurationMinutes: t.estimatedDurationMinutes,
+    reminderMinutesBefore: t.reminderMinutesBefore ?? null,
     completedAt: t.completedAt,
     isArchived: t.isArchived,
     isOverdue,
     parentTaskId: t.parentTaskId ?? null,
+    recurrenceRule: t.recurrenceRule?.frequency ? t.recurrenceRule : null,
+    isRecurring: Boolean(t.recurrenceRule?.frequency),
     createdAt: t.createdAt,
     updatedAt: t.updatedAt,
+  };
+}
+
+function serializeOccurrence(occurrence) {
+  return {
+    id: occurrence._id,
+    taskId: occurrence.taskId,
+    scheduledFor: occurrence.scheduledFor,
+    status: occurrence.status,
+    completedAt: occurrence.completedAt,
+    actualDurationMinutes: occurrence.actualDurationMinutes,
+    notes: occurrence.notes,
+    updatedAt: occurrence.updatedAt,
   };
 }
 
@@ -99,6 +129,18 @@ function parseDuration(value) {
     throw new HttpError(400, 'estimatedDurationMinutes must be a non-negative number');
   }
   return minutes;
+}
+
+function parseReminderMinutes(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const minutes = Number(value);
+  if (!Number.isFinite(minutes) || minutes < 0 || minutes > MAX_REMINDER_MINUTES) {
+    throw new HttpError(
+      400,
+      `reminderMinutesBefore must be between 0 and ${MAX_REMINDER_MINUTES} minutes`
+    );
+  }
+  return Math.round(minutes);
 }
 
 async function resolveCategory(categoryId, userId) {
@@ -173,7 +215,7 @@ async function findOwnedTask(taskId, userId) {
 
 // A task is visible to its owner and assignees; subtasks are also visible to
 // anyone who can view their parent.
-async function findVisibleTask(taskId, userId) {
+export async function findVisibleTask(taskId, userId) {
   if (!mongoose.isValidObjectId(taskId)) {
     throw new HttpError(404, 'Task not found');
   }
@@ -226,6 +268,13 @@ export const createTask = asyncHandler(async (req, res) => {
   }
 
   const assigneeIds = await validateAssignees(body.assigneeIds ?? []);
+  const recurrenceRule =
+    body.recurrenceRule !== undefined ? parseRecurrenceRule(body.recurrenceRule) : undefined;
+  const dueAt = body.dueAt ? parseDate(body.dueAt, 'dueAt') : null;
+  const reminderMinutesBefore = parseReminderMinutes(body.reminderMinutesBefore);
+  if (reminderMinutesBefore !== null && !dueAt) {
+    throw new HttpError(400, 'A reminder requires a due date');
+  }
 
   const task = new Task({
     title,
@@ -236,21 +285,31 @@ export const createTask = asyncHandler(async (req, res) => {
     priority: body.priority ?? 'medium',
     status: body.status ?? 'todo',
     startAt: body.startAt ? parseDate(body.startAt, 'startAt') : null,
-    dueAt: body.dueAt ? parseDate(body.dueAt, 'dueAt') : null,
+    dueAt,
     estimatedDurationMinutes: parseDuration(body.estimatedDurationMinutes),
+    reminderMinutesBefore,
+    recurrenceRule,
   });
   syncCompletion(task);
   await task.save();
 
   await logActivity(task._id, req.user._id, 'created', { newValue: task.title });
+  if (recurrenceRule) {
+    await ensureOccurrences(task, addUtcDays(startOfUtcDay(), HORIZON_DAYS));
+    await logActivity(task._id, req.user._id, 'recurrence_set', {
+      field: 'recurrenceRule',
+      newValue: JSON.stringify(recurrenceRule),
+    });
+  }
   if (assigneeIds.length > 0) {
     await logActivity(task._id, req.user._id, 'assigned', {
       field: 'assigneeIds',
       newValue: snapshot(assigneeIds),
     });
+    await notifyAssignees(task, assigneeIds, req.user._id);
   }
 
-  res.status(201).json({ task: serializeTask(task) });
+  res.status(201).json({ task: serializeTask(task, req.user._id) });
 });
 
 export const listTasks = asyncHandler(async (req, res) => {
@@ -400,6 +459,9 @@ export const updateTask = asyncHandler(async (req, res) => {
   }
 
   const changes = [];
+  const oldDueAt = task.dueAt;
+  const oldReminderOffset = task.reminderMinutesBefore ?? null;
+  let addedAssignees = [];
 
   if (body.title !== undefined) {
     const title = typeof body.title === 'string' ? body.title.trim() : '';
@@ -436,6 +498,16 @@ export const updateTask = asyncHandler(async (req, res) => {
     }
     task.status = body.status;
   }
+  if (!isAssigneeOnly && body.assigneeIds !== undefined) {
+    const assigneeIds = await validateAssignees(body.assigneeIds);
+    const before = (task.assigneeIds ?? []).map(String);
+    const after = assigneeIds.map(String);
+    if (JSON.stringify(before) !== JSON.stringify(after)) {
+      changes.push({ field: 'assigneeIds', from: snapshot(before), to: snapshot(after) });
+      task.assigneeIds = assigneeIds;
+      addedAssignees = after.filter((id) => !before.includes(id));
+    }
+  }
   if (!isAssigneeOnly && body.categoryId !== undefined) {
     const categoryId = await resolveCategory(body.categoryId, req.user._id);
     if (!sameValue(task.categoryId, categoryId)) {
@@ -457,6 +529,29 @@ export const updateTask = asyncHandler(async (req, res) => {
     }
     task.dueAt = dueAt;
   }
+  // A reminder cannot outlive its due date: clearing dueAt clears the offset.
+  if (task.dueAt === null && task.reminderMinutesBefore != null) {
+    changes.push({
+      field: 'reminderMinutesBefore',
+      from: task.reminderMinutesBefore,
+      to: null,
+    });
+    task.reminderMinutesBefore = null;
+  }
+  if (!isAssigneeOnly && body.reminderMinutesBefore !== undefined) {
+    const minutes = parseReminderMinutes(body.reminderMinutesBefore);
+    if (minutes !== null && !task.dueAt) {
+      throw new HttpError(400, 'A reminder requires a due date');
+    }
+    if (minutes !== (task.reminderMinutesBefore ?? null)) {
+      changes.push({
+        field: 'reminderMinutesBefore',
+        from: task.reminderMinutesBefore,
+        to: minutes,
+      });
+      task.reminderMinutesBefore = minutes;
+    }
+  }
   if (body.estimatedDurationMinutes !== undefined) {
     const duration = parseDuration(body.estimatedDurationMinutes);
     if (!sameValue(task.estimatedDurationMinutes, duration)) {
@@ -467,6 +562,26 @@ export const updateTask = asyncHandler(async (req, res) => {
       });
     }
     task.estimatedDurationMinutes = duration;
+  }
+
+  // Recurrence is owner-only (assignees were already rejected above). Changing
+  // or clearing the rule rebuilds future, not-yet-completed occurrences so the
+  // schedule always reflects the current rule; past history is kept.
+  let recurrenceChanged = null;
+  if (!isAssigneeOnly && body.recurrenceRule !== undefined) {
+    const rule = parseRecurrenceRule(body.recurrenceRule);
+    // Re-normalize the stored rule so key order can't fake a difference.
+    const stored = task.recurrenceRule?.frequency
+      ? parseRecurrenceRule(
+          task.recurrenceRule.toObject ? task.recurrenceRule.toObject() : task.recurrenceRule
+        )
+      : null;
+    const before = stored ? JSON.stringify(stored) : null;
+    const after = rule ? JSON.stringify(rule) : null;
+    if (before !== after) {
+      recurrenceChanged = { before, after };
+      task.recurrenceRule = rule;
+    }
   }
 
   syncCompletion(task);
@@ -480,12 +595,45 @@ export const updateTask = asyncHandler(async (req, res) => {
           ? 'due_at_changed'
           : change.field === 'priority'
             ? 'priority_changed'
-            : 'updated';
+            : change.field === 'assigneeIds'
+              ? 'assigned'
+              : 'updated';
     await logActivity(task._id, req.user._id, action, {
       field: change.field,
       oldValue: snapshot(change.from),
       newValue: snapshot(change.to),
     });
+  }
+
+  if (recurrenceChanged) {
+    const today = startOfUtcDay();
+    await TaskOccurrence.deleteMany({
+      taskId: task._id,
+      scheduledFor: { $gte: today },
+      status: { $ne: 'completed' },
+    });
+    if (task.recurrenceRule) {
+      await ensureOccurrences(task, addUtcDays(today, HORIZON_DAYS));
+    }
+    await logActivity(
+      task._id,
+      req.user._id,
+      task.recurrenceRule ? 'recurrence_set' : 'recurrence_cleared',
+      { field: 'recurrenceRule', oldValue: recurrenceChanged.before, newValue: recurrenceChanged.after }
+    );
+  }
+
+  const reminderScheduleChanged =
+    !sameValue(oldDueAt, task.dueAt) || (task.reminderMinutesBefore ?? null) !== oldReminderOffset;
+  const leftActive = ['completed', 'cancelled'].includes(task.status);
+  if (reminderScheduleChanged || leftActive) {
+    // Unread alerts tied to an old schedule (or to a now-finished task) would
+    // mislead; already-read ones stay as history.
+    await clearStaleAlerts(task._id);
+  }
+
+  if (addedAssignees.length > 0) {
+    await notifyAssignees(task, addedAssignees, req.user._id);
   }
 
   await task.populate('assigneeIds', 'name');
@@ -505,7 +653,8 @@ export const archiveTask = asyncHandler(async (req, res) => {
   await logActivity(task._id, req.user._id, 'archived', {
     newValue: cascade.modifiedCount > 0 ? `${cascade.modifiedCount} subtask(s) also archived` : null,
   });
-  res.json({ task: serializeTask(task) });
+  await clearStaleAlerts(task._id);
+  res.json({ task: serializeTask(task, req.user._id) });
 });
 
 export const restoreTask = asyncHandler(async (req, res) => {
@@ -521,7 +670,7 @@ export const restoreTask = asyncHandler(async (req, res) => {
   await logActivity(task._id, req.user._id, 'restored', {
     newValue: cascade.modifiedCount > 0 ? `${cascade.modifiedCount} subtask(s) also restored` : null,
   });
-  res.json({ task: serializeTask(task) });
+  res.json({ task: serializeTask(task, req.user._id) });
 });
 
 export const createSubtask = asyncHandler(async (req, res) => {
@@ -538,6 +687,9 @@ export const createSubtask = asyncHandler(async (req, res) => {
   if (!title) throw new HttpError(400, 'Title is required');
   if (title.length > 200) throw new HttpError(400, 'Title must be at most 200 characters');
 
+  if (body.recurrenceRule !== undefined) {
+    throw new HttpError(400, 'Subtasks cannot be recurring');
+  }
   if (body.priority !== undefined && !TASK_PRIORITIES.includes(body.priority)) {
     throw new HttpError(400, `priority must be one of: ${TASK_PRIORITIES.join(', ')}`);
   }
@@ -555,7 +707,7 @@ export const createSubtask = asyncHandler(async (req, res) => {
 
   await logActivity(parent._id, req.user._id, 'subtask_created', { newValue: subtask.title });
 
-  res.status(201).json({ task: serializeTask(subtask) });
+  res.status(201).json({ task: serializeTask(subtask, req.user._id) });
 });
 
 export const getSubtasks = asyncHandler(async (req, res) => {
@@ -563,7 +715,7 @@ export const getSubtasks = asyncHandler(async (req, res) => {
   const subtasks = await Task.find({ parentTaskId: parent._id })
     .populate('assigneeIds', 'name')
     .sort({ createdAt: 1 });
-  res.json({ subtasks: subtasks.map(serializeTask), progress: progressOf(subtasks) });
+  res.json({ subtasks: subtasks.map((s) => serializeTask(s, req.user._id)), progress: progressOf(subtasks) });
 });
 
 export const setAssignees = asyncHandler(async (req, res) => {
@@ -573,7 +725,7 @@ export const setAssignees = asyncHandler(async (req, res) => {
   const before = (task.assigneeIds ?? []).map(String);
   const after = assigneeIds.map(String);
   if (JSON.stringify(before) === JSON.stringify(after)) {
-    return res.json({ task: serializeTask(task) });
+    return res.json({ task: serializeTask(task, req.user._id) });
   }
 
   task.assigneeIds = assigneeIds;
@@ -585,8 +737,13 @@ export const setAssignees = asyncHandler(async (req, res) => {
     newValue: snapshot(after),
   });
 
+  const added = after.filter((id) => !before.includes(id));
+  if (added.length > 0) {
+    await notifyAssignees(task, added, req.user._id);
+  }
+
   await task.populate('assigneeIds', 'name');
-  res.json({ task: serializeTask(task) });
+  res.json({ task: serializeTask(task, req.user._id) });
 });
 
 export const removeAssignee = asyncHandler(async (req, res) => {
@@ -612,7 +769,7 @@ export const removeAssignee = asyncHandler(async (req, res) => {
   });
 
   await task.populate('assigneeIds', 'name');
-  res.json({ task: serializeTask(task) });
+  res.json({ task: serializeTask(task, req.user._id) });
 });
 
 export const getTaskActivities = asyncHandler(async (req, res) => {
@@ -622,4 +779,122 @@ export const getTaskActivities = asyncHandler(async (req, res) => {
     .limit(100)
     .populate('actorId', 'name');
   res.json({ activities: activities.map(serializeActivity) });
+});
+
+const MAX_OCCURRENCE_SPAN_MS = 366 * 24 * 60 * 60 * 1000;
+
+export const getOccurrences = asyncHandler(async (req, res) => {
+  const task = await findVisibleTask(req.params.taskId, req.user._id);
+  // Mongoose nested paths return a truthy wrapper even when stored as null,
+  // so the guard keys off `frequency` rather than truthiness.
+  if (!task.recurrenceRule?.frequency) {
+    return res.json({ occurrences: [] });
+  }
+
+  const today = startOfUtcDay();
+  const from = req.query.from
+    ? startOfUtcDay(parseDate(req.query.from, 'from'))
+    : addUtcDays(today, -7);
+  const to = req.query.to
+    ? startOfUtcDay(parseDate(req.query.to, 'to'))
+    : addUtcDays(today, HORIZON_DAYS);
+  if (from > to) throw new HttpError(400, 'from must be on or before to');
+  if (to.getTime() - from.getTime() > MAX_OCCURRENCE_SPAN_MS) {
+    throw new HttpError(400, 'from/to span must be at most 366 days');
+  }
+
+  await ensureOccurrences(task, to);
+  await sweepMissed(task._id);
+
+  const occurrences = await TaskOccurrence.find({
+    taskId: task._id,
+    scheduledFor: { $gte: from, $lte: to },
+  }).sort({ scheduledFor: 1 });
+  res.json({ occurrences: occurrences.map(serializeOccurrence) });
+});
+
+export const createOccurrence = asyncHandler(async (req, res) => {
+  const task = await findOwnedTask(req.params.taskId, req.user._id);
+  if (!task.recurrenceRule) {
+    throw new HttpError(400, 'Task is not recurring');
+  }
+  const raw = req.body?.scheduledFor;
+  if (raw === undefined || raw === null || raw === '') {
+    throw new HttpError(400, 'scheduledFor is required');
+  }
+  const scheduledFor = startOfUtcDay(parseDate(raw, 'scheduledFor'));
+
+  const existing = await TaskOccurrence.findOne({ taskId: task._id, scheduledFor });
+  if (existing) {
+    return res.status(200).json({ occurrence: serializeOccurrence(existing) });
+  }
+  const occurrence = await TaskOccurrence.create({ taskId: task._id, scheduledFor });
+  res.status(201).json({ occurrence: serializeOccurrence(occurrence) });
+});
+
+export const updateOccurrence = asyncHandler(async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.occurrenceId)) {
+    throw new HttpError(404, 'Occurrence not found');
+  }
+  const occurrence = await TaskOccurrence.findById(req.params.occurrenceId);
+  if (!occurrence) {
+    throw new HttpError(404, 'Occurrence not found');
+  }
+  // Owner and assignees may act on occurrences; anyone else gets a 404.
+  const task = await findVisibleTask(occurrence.taskId, req.user._id);
+
+  const body = req.body ?? {};
+  let action = null;
+
+  if (body.status !== undefined) {
+    const next = body.status;
+    if (!['pending', 'completed', 'skipped'].includes(next)) {
+      throw new HttpError(400, 'status must be one of: pending, completed, skipped');
+    }
+    if (next === 'completed') {
+      if (!['pending', 'missed'].includes(occurrence.status)) {
+        throw new HttpError(400, 'Only a pending or missed occurrence can be completed');
+      }
+      occurrence.status = 'completed';
+      occurrence.completedAt = new Date();
+      action = 'occurrence_completed';
+    } else if (next === 'skipped') {
+      if (!['pending', 'missed'].includes(occurrence.status)) {
+        throw new HttpError(400, 'Only a pending or missed occurrence can be skipped');
+      }
+      occurrence.status = 'skipped';
+      action = 'occurrence_skipped';
+    } else if (occurrence.status === 'missed') {
+      // Historical record: a missed occurrence stays missed unless completed
+      // or skipped, so past schedule truth is never silently rewritten.
+      throw new HttpError(400, 'A missed occurrence cannot be reopened; complete or skip it instead');
+    } else if (['completed', 'skipped'].includes(occurrence.status)) {
+      occurrence.status = 'pending';
+      occurrence.completedAt = null;
+      action = 'occurrence_reopened';
+    }
+  }
+
+  if (body.actualDurationMinutes !== undefined) {
+    const minutes = body.actualDurationMinutes === null ? null : Number(body.actualDurationMinutes);
+    if (minutes !== null && (!Number.isFinite(minutes) || minutes < 0)) {
+      throw new HttpError(400, 'actualDurationMinutes must be a non-negative number');
+    }
+    occurrence.actualDurationMinutes = minutes;
+  }
+  if (body.notes !== undefined) {
+    if (typeof body.notes !== 'string' || body.notes.length > 500) {
+      throw new HttpError(400, 'notes must be a string of at most 500 characters');
+    }
+    occurrence.notes = body.notes.trim();
+  }
+
+  await occurrence.save();
+  if (action) {
+    await logActivity(task._id, req.user._id, action, {
+      field: 'occurrence',
+      newValue: occurrence.scheduledFor.toISOString().slice(0, 10),
+    });
+  }
+  res.json({ occurrence: serializeOccurrence(occurrence) });
 });

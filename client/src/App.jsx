@@ -5,6 +5,8 @@ import Login from './pages/Login.jsx';
 import Register from './pages/Register.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import Tasks from './pages/Tasks.jsx';
+import Calendar from './pages/Calendar.jsx';
+import Board from './pages/Board.jsx';
 import Categories from './pages/Categories.jsx';
 import { useAuth } from './context/AuthContext.jsx';
 
@@ -19,6 +21,8 @@ export default function App() {
         <Route element={<Layout />}>
           <Route path="/" element={<Dashboard />} />
           <Route path="/tasks" element={<Tasks />} />
+          <Route path="/calendar" element={<Calendar />} />
+          <Route path="/board" element={<Board />} />
           <Route path="/categories" element={<Categories />} />
         </Route>
       </Route>

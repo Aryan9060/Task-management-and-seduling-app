@@ -3,7 +3,7 @@ import HttpError from '../utils/httpError.js';
 import asyncHandler from '../utils/asyncHandler.js';
 
 export const searchUsers = asyncHandler(async (req, res) => {
-  const q = String(req.query.q ?? '').trim();
+  const q = String(req.query.search ?? '').trim();
   if (!q) {
     return res.json({ users: [] });
   }

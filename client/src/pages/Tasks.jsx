@@ -3,6 +3,12 @@ import api, { errorMessage } from '../api/client.js';
 import TaskForm from '../components/TaskForm.jsx';
 import TaskItem from '../components/TaskItem.jsx';
 
+const SCOPE_OPTIONS = [
+  { value: '', label: 'All' },
+  { value: 'assigned', label: 'Assigned to me' },
+  { value: 'owned', label: 'Owned by me' },
+];
+
 const EMPTY_FILTERS = {
   search: '',
   status: '',
@@ -11,6 +17,7 @@ const EMPTY_FILTERS = {
   sort: 'dueAt',
   view: 'active',
   overdueOnly: false,
+  scope: '',
 };
 
 export default function Tasks() {
@@ -46,6 +53,7 @@ export default function Tasks() {
       if (currentFilters.priority) params.priority = currentFilters.priority;
       if (currentFilters.categoryId) params.categoryId = currentFilters.categoryId;
       if (currentFilters.overdueOnly) params.overdue = 'true';
+      if (currentFilters.scope) params.scope = currentFilters.scope;
       if (currentFilters.search) params.search = currentFilters.search;
 
       const { data } = await api.get('/tasks', { params });
@@ -179,6 +187,18 @@ export default function Tasks() {
           <option value="title">Title A–Z</option>
         </select>
         <div className="filter-toggles">
+          <div className="scope-chips" role="group" aria-label="Task scope">
+            {SCOPE_OPTIONS.map((option) => (
+              <button
+                key={option.value || 'all'}
+                type="button"
+                className={`chip${filters.scope === option.value ? ' chip-active' : ''}`}
+                onClick={() => setFilters((prev) => ({ ...prev, scope: option.value }))}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
           <button
             type="button"
             className={`chip${filters.overdueOnly ? ' chip-active' : ''}`}
