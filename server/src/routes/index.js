@@ -6,6 +6,7 @@ import categoryRoutes from './category.routes.js';
 import dashboardRoutes from './dashboard.routes.js';
 import userRoutes from './user.routes.js';
 import notificationRoutes from './notification.routes.js';
+import timerRoutes from './timer.routes.js';
 
 const router = Router();
 
@@ -16,5 +17,6 @@ router.use('/categories', categoryRoutes);
 router.use('/dashboard', dashboardRoutes);
 router.use('/users', userRoutes);
 router.use('/notifications', notificationRoutes);
+router.use('/timer', timerRoutes);
 
 export default router;

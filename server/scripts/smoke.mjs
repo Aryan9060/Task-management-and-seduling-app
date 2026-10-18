@@ -244,7 +244,7 @@ check('dashboard trend has 7 entries', Array.isArray(s.trend) && s.trend.length 
 const todayUtc = new Date().toISOString().slice(0, 10);
 check(
   'dashboard trend includes today with completions',
-  s.trend[6]?.date === todayUtc && s.trend[6]?.count === 1,
+  s.trend[6]?.date === todayUtc && s.trend[6]?.completed === 1,
   JSON.stringify(s.trend)
 );
 
@@ -1055,6 +1055,133 @@ const archComment = await req('POST', `/tasks/${archId}/comments`, {
   body: { body: 'too late' },
 });
 check('cannot comment on an archived task', archComment.status === 400);
+
+// Phase 6: time tracking and dashboard analytics
+const t6Res = await req('POST', '/tasks', {
+  token: tokenE,
+  body: { title: 'Time the work', assigneeIds: [userIdF], estimatedDurationMinutes: 120 },
+});
+const t6Id = t6Res.data.task.id;
+check('setup timed task', t6Res.status === 201);
+
+const noAuthTimer = await req('POST', `/tasks/${t6Id}/timer/start`, {});
+check('timer start requires auth', noAuthTimer.status === 401);
+
+const start1 = await req('POST', `/tasks/${t6Id}/timer/start`, { token: tokenE });
+check('owner starts a timer', start1.status === 201 && start1.data.entry.running === true);
+
+const active1 = await req('GET', '/timer/active', { token: tokenE });
+check('active timer is visible to its user', active1.data.entry?.taskId === t6Id);
+
+const activeNone = await req('GET', '/timer/active', { token: tokenF });
+check('other users have no active timer', activeNone.data.entry === null);
+
+const startF = await req('POST', `/tasks/${t6Id}/timer/start`, { token: tokenF });
+check('assignee starts their own timer', startF.status === 201);
+
+const t6b = await req('POST', '/tasks', { token: tokenE, body: { title: 'Second timed task' } });
+const t6bId = t6b.data.task.id;
+const start2 = await req('POST', `/tasks/${t6bId}/timer/start`, { token: tokenE });
+check(
+  'starting another timer auto-stops the previous one',
+  start2.status === 201 &&
+    start2.data.stopped !== null &&
+    start2.data.stopped.entry.taskId === t6Id
+);
+
+const t6After = await req('GET', `/tasks/${t6Id}`, { token: tokenE });
+check('auto-stopped entry logs at least a minute', t6After.data.task.timeSpentMinutes >= 1);
+
+const stop2 = await req('POST', `/tasks/${t6bId}/timer/stop`, { token: tokenE });
+check(
+  'stopping a timer closes the entry',
+  stop2.status === 200 && stop2.data.entry.running === false && stop2.data.entry.durationMinutes >= 1
+);
+
+const stopAgain = await req('POST', `/tasks/${t6bId}/timer/stop`, { token: tokenE });
+check('stopping without a running timer is 404', stopAgain.status === 404);
+
+const stopF = await req('POST', `/tasks/${t6Id}/timer/stop`, { token: tokenF });
+check('assignee stops their own timer', stopF.status === 200);
+
+const startOutsider = await req('POST', `/tasks/${t6Id}/timer/start`, { token: tokenB });
+check('outsider cannot start a timer', startOutsider.status === 404);
+
+const manualBad = await req('POST', `/tasks/${t6Id}/time-entries`, {
+  token: tokenE,
+  body: { minutes: 0 },
+});
+check('manual entry rejects zero minutes', manualBad.status === 400);
+
+const manualBig = await req('POST', `/tasks/${t6Id}/time-entries`, {
+  token: tokenE,
+  body: { minutes: 5000 },
+});
+check('manual entry rejects over a day', manualBig.status === 400);
+
+const manual = await req('POST', `/tasks/${t6Id}/time-entries`, {
+  token: tokenF,
+  body: { minutes: 45, notes: 'Paired review' },
+});
+check(
+  'assignee logs manual time',
+  manual.status === 201 && manual.data.entry.durationMinutes === 45 && manual.data.entry.source === 'manual'
+);
+
+const entries = await req('GET', `/tasks/${t6Id}/time-entries`, { token: tokenE });
+check(
+  'entries list and logged total',
+  entries.status === 200 && entries.data.entries.length === 3 && entries.data.totalMinutes >= 47
+);
+
+const entriesOutsider = await req('GET', `/tasks/${t6Id}/time-entries`, { token: tokenB });
+check('outsider cannot read time entries', entriesOutsider.status === 404);
+
+const complete6 = await req('PATCH', `/tasks/${t6bId}`, {
+  token: tokenE,
+  body: { status: 'completed' },
+});
+check('complete the second timed task', complete6.status === 200);
+
+const timeCompleted = await req('POST', `/tasks/${t6bId}/timer/start`, { token: tokenE });
+check('completed tasks cannot be timed', timeCompleted.status === 400);
+
+const t6c = await req('POST', '/tasks', { token: tokenE, body: { title: 'Complete with running timer' } });
+const t6cId = t6c.data.task.id;
+await req('POST', `/tasks/${t6cId}/timer/start`, { token: tokenE });
+const completeRunning = await req('PATCH', `/tasks/${t6cId}`, {
+  token: tokenE,
+  body: { status: 'completed' },
+});
+const activeAfterComplete = await req('GET', '/timer/active', { token: tokenE });
+check(
+  'completing a task stops its running timer',
+  completeRunning.status === 200 && activeAfterComplete.data.entry === null
+);
+
+const arch6 = await req('POST', '/tasks', { token: tokenE, body: { title: 'Archive timed' } });
+const arch6Id = arch6.data.task.id;
+await req('DELETE', `/tasks/${arch6Id}`, { token: tokenE });
+const timeArchived = await req('POST', `/tasks/${arch6Id}/timer/start`, { token: tokenE });
+check('archived tasks cannot be timed', timeArchived.status === 400);
+
+const dash6 = await req('GET', '/dashboard/summary', { token: tokenE });
+const s6 = dash6.data.summary;
+check(
+  'summary trend includes created, completed and minutes',
+  s6.trend.every((d) => 'created' in d && 'completed' in d && 'minutes' in d)
+);
+check('summary includes a category breakdown', Array.isArray(s6.byCategory));
+check(
+  'summary includes estimated vs logged totals',
+  s6.timeEstimatedMinutes === 120 && s6.timeLoggedMinutes >= 47
+);
+
+const dashF6 = await req('GET', '/dashboard/summary', { token: tokenF });
+check(
+  'weekly minutes reflect the logged time',
+  dashF6.data.summary.trend.reduce((sum, d) => sum + d.minutes, 0) >= 46
+);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

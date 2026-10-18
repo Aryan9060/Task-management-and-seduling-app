@@ -19,6 +19,7 @@ import {
   clearStaleAlerts,
   notifyAssignees,
 } from '../utils/notifications.js';
+import { stopTimerForTask } from '../utils/timers.js';
 
 const MAX_LIMIT = 100;
 const MAX_ASSIGNEES = 20;
@@ -69,6 +70,7 @@ function serializeTask(task, viewerId) {
     startAt: t.startAt,
     dueAt: t.dueAt,
     estimatedDurationMinutes: t.estimatedDurationMinutes,
+    timeSpentMinutes: t.timeSpentMinutes ?? 0,
     reminderMinutesBefore: t.reminderMinutesBefore ?? null,
     completedAt: t.completedAt,
     isArchived: t.isArchived,
@@ -631,6 +633,10 @@ export const updateTask = asyncHandler(async (req, res) => {
     // mislead; already-read ones stay as history.
     await clearStaleAlerts(task._id);
   }
+  if (leftActive) {
+    // A running timer must not outlive the task leaving the active board.
+    await stopTimerForTask(task._id);
+  }
 
   if (addedAssignees.length > 0) {
     await notifyAssignees(task, addedAssignees, req.user._id);
@@ -654,6 +660,7 @@ export const archiveTask = asyncHandler(async (req, res) => {
     newValue: cascade.modifiedCount > 0 ? `${cascade.modifiedCount} subtask(s) also archived` : null,
   });
   await clearStaleAlerts(task._id);
+  await stopTimerForTask(task._id);
   res.json({ task: serializeTask(task, req.user._id) });
 });
 

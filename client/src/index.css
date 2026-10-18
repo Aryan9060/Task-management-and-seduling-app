@@ -1907,3 +1907,387 @@ a {
   font-size: 0.74rem;
   color: var(--muted);
 }
+
+/* Phase 6: charts, time tracking, timers, countdowns */
+
+.donut-row {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+}
+
+.donut-wrap {
+  position: relative;
+  width: 168px;
+  height: 168px;
+  flex-shrink: 0;
+}
+
+.donut-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.donut-value {
+  font-size: 1.6rem;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.donut-sub {
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.donut-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  flex: 1;
+  min-width: 150px;
+}
+
+.donut-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.donut-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.donut-legend-label {
+  color: var(--muted);
+  margin-right: auto;
+}
+
+.donut-legend-value {
+  font-weight: 700;
+}
+
+.bar-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.6rem;
+  height: 150px;
+  margin-top: 0.75rem;
+}
+
+.bar-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  height: 100%;
+  gap: 0.3rem;
+}
+
+.bar-stack {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 3px;
+}
+
+.bar {
+  flex: 1;
+  max-width: 18px;
+  min-height: 3px;
+  border-radius: 5px 5px 2px 2px;
+}
+
+.bar-created {
+  background: var(--info);
+}
+
+.bar-completed {
+  background: var(--success);
+}
+
+.bar-minutes {
+  background: linear-gradient(180deg, var(--primary), #8b5cf6);
+}
+
+.bar-value {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--muted);
+  min-height: 1em;
+}
+
+.bar-day {
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.chart-legend {
+  display: flex;
+  gap: 1rem;
+  margin-top: 0.6rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.chart-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+}
+
+.chart-dot-created {
+  background: var(--info);
+}
+
+.chart-dot-completed {
+  background: var(--success);
+}
+
+.category-bars {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.category-bar-row {
+  display: grid;
+  grid-template-columns: minmax(0, 110px) 1fr auto;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.category-bar-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.category-bar-track {
+  height: 12px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.category-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.4s ease;
+}
+
+.category-bar-count {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.time-compare {
+  margin-top: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.time-compare-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+.time-compare-row strong {
+  color: var(--text);
+}
+
+.countdown {
+  display: inline-block;
+  margin-left: 0.45rem;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.countdown-overdue {
+  background: var(--danger-soft);
+  border-color: var(--danger-soft);
+  color: var(--danger);
+}
+
+.btn-timer-running {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.time-list {
+  list-style: none;
+  margin: 0 0 0.75rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.time-item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.45rem 0.7rem;
+  font-size: 0.85rem;
+}
+
+.time-when {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.time-user {
+  font-weight: 600;
+  font-size: 0.82rem;
+}
+
+.time-notes {
+  color: var(--muted);
+  flex: 1;
+  min-width: 100px;
+  overflow-wrap: anywhere;
+}
+
+.time-minutes {
+  margin-left: auto;
+  font-weight: 700;
+}
+
+.badge-time-source {
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.time-add {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.time-add .input-compact {
+  width: 110px;
+}
+
+.time-add .input {
+  flex: 1;
+  min-width: 140px;
+}
+
+.widget-timer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.timer-phase {
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.timer-display {
+  font-size: 2.4rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.timer-display-active {
+  color: var(--primary);
+}
+
+.timer-display-finished {
+  color: var(--danger);
+}
+
+.progress-fill-break {
+  background: linear-gradient(90deg, var(--success), #4ade80);
+}
+
+.timer-minutes {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.timer-minutes input {
+  width: 90px;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: inherit;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.timer-minutes input:disabled {
+  background: var(--bg);
+  color: var(--muted);
+}
+
+.timer-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+@media (max-width: 760px) {
+  .bar-chart {
+    height: 120px;
+  }
+
+  .timer-display {
+    font-size: 2rem;
+  }
+
+  .category-bar-row {
+    grid-template-columns: minmax(0, 90px) 1fr auto;
+  }
+}

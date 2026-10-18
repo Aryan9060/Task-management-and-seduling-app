@@ -30,6 +30,8 @@ const taskSchema = new mongoose.Schema(
     startAt: { type: Date, default: null },
     dueAt: { type: Date, default: null },
     estimatedDurationMinutes: { type: Number, min: 0, default: null },
+    // Denormalized sum of TimeEntry.durationMinutes for quick list/dashboard reads.
+    timeSpentMinutes: { type: Number, min: 0, default: 0 },
     // Minutes before dueAt to alert the owner and assignees; null = no reminder.
     reminderMinutesBefore: { type: Number, min: 0, max: 10080, default: null },
     completedAt: { type: Date, default: null },

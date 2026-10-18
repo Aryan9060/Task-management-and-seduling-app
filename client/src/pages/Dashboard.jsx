@@ -1,8 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api, { errorMessage } from '../api/client.js';
-import { formatDateTime, formatTrendDay } from '../utils/datetime.js';
+import { formatDateTime, formatDuration, formatCountdown } from '../utils/datetime.js';
 import { useAuth } from '../context/AuthContext.jsx';
+import useNow from '../hooks/useNow.js';
+import { DonutChart, DonutLegend, TrendChart, MinutesChart, CategoryBars } from '../components/Charts.jsx';
+import PomodoroTimer from '../components/PomodoroTimer.jsx';
+import CountdownTimer from '../components/CountdownTimer.jsx';
 
 function SummaryCard({ label, value, tone }) {
   return (
@@ -19,6 +23,7 @@ export default function Dashboard() {
   const [upcoming, setUpcoming] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const now = useNow(1000);
 
   useEffect(() => {
     let cancelled = false;
@@ -66,7 +71,17 @@ export default function Dashboard() {
     );
   }
 
-  const trendMax = Math.max(1, ...summary.trend.map((t) => t.count));
+  const segments = [
+    { label: 'Completed', value: summary.completed, color: 'var(--success)' },
+    { label: 'In Progress', value: summary.inProgress, color: 'var(--info)' },
+    { label: 'To Do', value: summary.todo, color: 'var(--warning)' },
+    { label: 'Cancelled', value: summary.cancelled, color: 'var(--muted)' },
+  ];
+
+  const timeProgress =
+    summary.timeEstimatedMinutes > 0
+      ? Math.min(100, Math.round((summary.timeLoggedMinutes / summary.timeEstimatedMinutes) * 100))
+      : 0;
 
   return (
     <div className="page-content">
@@ -94,28 +109,17 @@ export default function Dashboard() {
 
       <div className="dashboard-grid">
         <section className="panel">
-          <h2>Completion rate</h2>
-          <div className="progress-track">
-            <div className="progress-fill" style={{ width: `${summary.completionRate}%` }} />
+          <h2>Task mix</h2>
+          <div className="donut-row">
+            <DonutChart segments={segments} centerLabel={`${summary.completionRate}%`} centerSub="complete" />
+            <DonutLegend segments={segments} />
           </div>
           <p className="panel-hint">
             {summary.completionRate}% of active tasks are completed
-            {summary.cancelled > 0 ? ` (${summary.cancelled} cancelled excluded)` : ''}.
+            {summary.cancelled > 0 ? ` (${summary.cancelled} cancelled excluded)` : ''}
+            {summary.overdue > 0 ? ` · ${summary.overdue} overdue` : ''}
+            {summary.dueToday > 0 ? ` · ${summary.dueToday} due today` : ''}.
           </p>
-
-          <h2>Completed in the last 7 days</h2>
-          <div className="trend-chart">
-            {summary.trend.map((day) => (
-              <div key={day.date} className="trend-col">
-                <span className="trend-count">{day.count}</span>
-                <div
-                  className="trend-bar"
-                  style={{ height: `${Math.round((day.count / trendMax) * 100)}%` }}
-                />
-                <span className="trend-day">{formatTrendDay(day.date)}</span>
-              </div>
-            ))}
-          </div>
         </section>
 
         <section className="panel">
@@ -128,13 +132,70 @@ export default function Dashboard() {
                 <li key={task.id} className="upcoming-item">
                   <div>
                     <span className="upcoming-title">{task.title}</span>
-                    <span className="upcoming-due">Due {formatDateTime(task.dueAt)}</span>
+                    <span className="upcoming-due">
+                      Due {formatDateTime(task.dueAt)}
+                      <span className={`countdown${task.isOverdue ? ' countdown-overdue' : ''}`}>
+                        {formatCountdown(task.dueAt, now)}
+                      </span>
+                    </span>
                   </div>
                   {task.isOverdue && <span className="badge badge-overdue">Overdue</span>}
                 </li>
               ))}
             </ul>
           )}
+        </section>
+
+        <section className="panel">
+          <h2>Last 7 days</h2>
+          <TrendChart days={summary.trend} />
+          <div className="chart-legend">
+            <span className="chart-legend-item">
+              <span className="chart-dot chart-dot-created" /> Created
+            </span>
+            <span className="chart-legend-item">
+              <span className="chart-dot chart-dot-completed" /> Completed
+            </span>
+          </div>
+        </section>
+
+        <section className="panel">
+          <h2>Time logged (last 7 days)</h2>
+          <MinutesChart days={summary.trend} />
+          <div className="time-compare">
+            <div className="time-compare-row">
+              <span>Logged (active tasks)</span>
+              <strong>{formatDuration(summary.timeLoggedMinutes)}</strong>
+            </div>
+            <div className="time-compare-row">
+              <span>Estimated (active tasks)</span>
+              <strong>{formatDuration(summary.timeEstimatedMinutes)}</strong>
+            </div>
+            {summary.timeEstimatedMinutes > 0 && (
+              <div className="progress-track">
+                <div className="progress-fill" style={{ width: `${timeProgress}%` }} />
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="panel">
+          <h2>By category</h2>
+          {summary.byCategory.length === 0 ? (
+            <p className="panel-hint">No active tasks yet. Create tasks with categories to see the breakdown.</p>
+          ) : (
+            <CategoryBars items={summary.byCategory} />
+          )}
+        </section>
+
+        <section className="panel">
+          <h2>Focus timer</h2>
+          <PomodoroTimer />
+        </section>
+
+        <section className="panel">
+          <h2>Countdown</h2>
+          <CountdownTimer />
         </section>
       </div>
     </div>

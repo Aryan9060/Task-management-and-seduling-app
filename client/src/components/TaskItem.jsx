@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import api, { errorMessage } from '../api/client.js';
-import { formatDateTime, formatDate } from '../utils/datetime.js';
+import {
+  formatClock,
+  formatCountdown,
+  formatDate,
+  formatDateTime,
+  formatDuration,
+} from '../utils/datetime.js';
+import useNow from '../hooks/useNow.js';
+import { useTimer } from '../context/TimerContext.jsx';
 
 const STATUS_LABELS = {
   todo: 'To Do',
@@ -104,16 +112,22 @@ export default function TaskItem({
   const archived = task.isArchived;
   const isOwner = task.isOwner;
   const progress = task.subtaskProgress ?? { total: 0, completed: 0 };
+  const now = useNow(1000);
+  const { activeEntry, start: startTimer, stop: stopTimer } = useTimer();
+  const timerRunningHere = activeEntry?.taskId === task.id;
 
   const [expanded, setExpanded] = useState(false);
   const [details, setDetails] = useState(null);
   const [activities, setActivities] = useState([]);
   const [occurrences, setOccurrences] = useState([]);
   const [comments, setComments] = useState([]);
+  const [timeEntries, setTimeEntries] = useState([]);
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [detailError, setDetailError] = useState('');
   const [newSubtaskTitle, setNewSubtaskTitle] = useState('');
   const [newComment, setNewComment] = useState('');
+  const [newMinutes, setNewMinutes] = useState('');
+  const [newNotes, setNewNotes] = useState('');
   const [mutating, setMutating] = useState(false);
 
   const loadDetails = useCallback(async () => {
@@ -124,14 +138,17 @@ export default function TaskItem({
         api.get(`/tasks/${task.id}`),
         api.get(`/tasks/${task.id}/activities`, { params: { limit: 20 } }),
         api.get(`/tasks/${task.id}/comments`),
+        api.get(`/tasks/${task.id}/time-entries`),
       ];
       if (task.isRecurring) {
         requests.push(api.get(`/tasks/${task.id}/occurrences`));
       }
-      const [detailRes, activityRes, commentRes, occurrenceRes] = await Promise.all(requests);
+      const [detailRes, activityRes, commentRes, timeRes, occurrenceRes] =
+        await Promise.all(requests);
       setDetails({ task: detailRes.data.task, subtasks: detailRes.data.subtasks });
       setActivities(activityRes.data.activities);
       setComments(commentRes.data.comments);
+      setTimeEntries(timeRes.data.entries);
       setOccurrences(occurrenceRes?.data.occurrences ?? []);
     } catch (err) {
       setDetailError(errorMessage(err, 'Unable to load task details'));
@@ -202,6 +219,30 @@ export default function TaskItem({
       'Unable to delete the comment'
     );
 
+  const handleStartTimer = () =>
+    withReload(() => startTimer(task.id), 'Unable to start the timer');
+
+  const handleStopTimer = () =>
+    withReload(() => stopTimer(task.id), 'Unable to stop the timer');
+
+  const addManualTime = (event) => {
+    event.preventDefault();
+    const minutes = Number(newMinutes);
+    if (!Number.isFinite(minutes) || minutes < 1) return;
+    withReload(async () => {
+      await api.post(`/tasks/${task.id}/time-entries`, {
+        minutes,
+        notes: newNotes.trim(),
+      });
+      setNewMinutes('');
+      setNewNotes('');
+    }, 'Unable to log time');
+  };
+
+  const elapsedMs = timerRunningHere
+    ? Math.max(0, now.getTime() - new Date(activeEntry.startedAt).getTime())
+    : 0;
+
   const detailsTask = details?.task ?? task;
   const detailProgress = detailsTask.subtaskProgress ?? progress;
   const percent =
@@ -245,13 +286,23 @@ export default function TaskItem({
             </span>
           )}
           <span className="task-meta-text">Due: {formatDateTime(task.dueAt)}</span>
+          {task.dueAt && !['completed', 'cancelled'].includes(task.status) && (
+            <span className={`countdown${task.isOverdue ? ' countdown-overdue' : ''}`}>
+              {formatCountdown(task.dueAt, now)}
+            </span>
+          )}
           {task.reminderMinutesBefore != null && (
             <span className="badge badge-reminder">
               Reminder {formatReminder(task.reminderMinutesBefore)}
             </span>
           )}
-          {task.estimatedDurationMinutes != null && (
-            <span className="task-meta-text">{task.estimatedDurationMinutes} min</span>
+          {(task.timeSpentMinutes > 0 || task.estimatedDurationMinutes != null) && (
+            <span className="task-meta-text">
+              {formatDuration(task.timeSpentMinutes ?? 0)} logged
+              {task.estimatedDurationMinutes != null
+                ? ` · est ${formatDuration(task.estimatedDurationMinutes)}`
+                : ''}
+            </span>
           )}
           {task.assignees.length > 0 && (
             <span className="task-assignees">
@@ -269,6 +320,17 @@ export default function TaskItem({
       </div>
 
       <div className="task-actions">
+        {!archived && !['completed', 'cancelled'].includes(task.status) && (
+          <button
+            type="button"
+            className={`btn btn-ghost${timerRunningHere ? ' btn-timer-running' : ''}`}
+            disabled={mutating}
+            onClick={timerRunningHere ? handleStopTimer : handleStartTimer}
+            title={timerRunningHere ? 'Stop the running timer' : 'Track time on this task'}
+          >
+            {timerRunningHere ? `Stop ${formatClock(elapsedMs)}` : 'Start timer'}
+          </button>
+        )}
         {!archived && (
           <select
             className="input-compact"
@@ -447,6 +509,65 @@ export default function TaskItem({
                   )}
                 </section>
               )}
+
+              <section className="details-section">
+                <div className="details-heading">
+                  <h4>Time</h4>
+                  <span className="task-meta-text">
+                    {formatDuration(detailsTask.timeSpentMinutes ?? 0)} logged
+                    {detailsTask.estimatedDurationMinutes != null
+                      ? ` · est ${formatDuration(detailsTask.estimatedDurationMinutes)}`
+                      : ''}
+                  </span>
+                </div>
+                {timeEntries.length === 0 ? (
+                  <p className="task-meta-text">No time logged yet.</p>
+                ) : (
+                  <ul className="time-list">
+                    {timeEntries.map((entry) => (
+                      <li key={entry.id} className="time-item">
+                        <span className="time-when">{formatDateTime(entry.startedAt)}</span>
+                        <span className="badge badge-time-source">
+                          {entry.running ? 'Running' : entry.source === 'manual' ? 'Manual' : 'Timer'}
+                        </span>
+                        {entry.user?.name && <span className="time-user">{entry.user.name}</span>}
+                        {entry.notes && <span className="time-notes">{entry.notes}</span>}
+                        <span className="time-minutes">
+                          {entry.running ? '…' : formatDuration(entry.durationMinutes)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {!archived && (
+                  <form className="time-add" onSubmit={addManualTime}>
+                    <input
+                      type="number"
+                      min="1"
+                      max="1440"
+                      className="input input-compact"
+                      placeholder="Minutes"
+                      value={newMinutes}
+                      onChange={(e) => setNewMinutes(e.target.value)}
+                    />
+                    <input
+                      type="text"
+                      className="input"
+                      maxLength={500}
+                      placeholder="Note (optional)"
+                      value={newNotes}
+                      onChange={(e) => setNewNotes(e.target.value)}
+                    />
+                    <button
+                      type="submit"
+                      className="btn btn-ghost btn-small"
+                      disabled={mutating || !newMinutes}
+                    >
+                      Log time
+                    </button>
+                  </form>
+                )}
+              </section>
 
               <section className="details-section">
                 <div className="details-heading">

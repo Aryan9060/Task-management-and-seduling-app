@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import Task from '../models/Task.js';
 import TaskOccurrence from '../models/TaskOccurrence.js';
+import TimeEntry from '../models/TimeEntry.js';
 import asyncHandler from '../utils/asyncHandler.js';
 import { startOfUtcDay } from '../utils/recurrence.js';
 
@@ -19,7 +20,7 @@ export const getSummary = asyncHandler(async (req, res) => {
   const trendStart = startOfUtcDay(now);
   trendStart.setUTCDate(trendStart.getUTCDate() - (TREND_DAYS - 1));
 
-  const [total, todo, inProgress, completed, cancelled, overdue, dueToday, trendRaw] =
+  const [total, todo, inProgress, completed, cancelled, overdue, dueToday, trendRaw, createdRaw, minutesRaw, categoryRaw, timeTotalsRaw] =
     await Promise.all([
       Task.countDocuments(base),
       Task.countDocuments({ ...base, status: 'todo' }),
@@ -55,16 +56,109 @@ export const getSummary = asyncHandler(async (req, res) => {
           },
         },
       ]),
+      Task.aggregate([
+        {
+          $match: {
+            $and: [
+              visibility,
+              { isArchived: false },
+              { parentTaskId: null },
+              { createdAt: { $gte: trendStart } },
+            ],
+          },
+        },
+        {
+          $group: {
+            _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+            count: { $sum: 1 },
+          },
+        },
+      ]),
+      TimeEntry.aggregate([
+        {
+          $match: {
+            userId,
+            startedAt: { $gte: trendStart },
+            durationMinutes: { $ne: null },
+          },
+        },
+        {
+          $group: {
+            _id: { $dateToString: { format: '%Y-%m-%d', date: '$startedAt' } },
+            minutes: { $sum: '$durationMinutes' },
+          },
+        },
+      ]),
+      Task.aggregate([
+        {
+          $match: {
+            $and: [
+              visibility,
+              { isArchived: false },
+              { parentTaskId: null },
+              { status: { $ne: 'cancelled' } },
+            ],
+          },
+        },
+        { $group: { _id: '$categoryId', count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        {
+          $lookup: {
+            from: 'categories',
+            localField: '_id',
+            foreignField: '_id',
+            as: 'category',
+          },
+        },
+      ]),
+      Task.aggregate([
+        {
+          $match: {
+            $and: [
+              visibility,
+              { isArchived: false },
+              { parentTaskId: null },
+              { status: { $in: ['todo', 'in_progress'] } },
+            ],
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            estimated: { $sum: { $ifNull: ['$estimatedDurationMinutes', 0] } },
+            logged: { $sum: { $ifNull: ['$timeSpentMinutes', 0] } },
+          },
+        },
+      ]),
     ]);
 
   const trendCounts = new Map(trendRaw.map((entry) => [entry._id, entry.count]));
+  const createdCounts = new Map(createdRaw.map((entry) => [entry._id, entry.count]));
+  const minutesByDay = new Map(minutesRaw.map((entry) => [entry._id, entry.minutes]));
   const trend = [];
   for (let i = 0; i < TREND_DAYS; i += 1) {
     const day = new Date(trendStart);
     day.setDate(day.getDate() + i);
     const key = day.toISOString().slice(0, 10);
-    trend.push({ date: key, count: trendCounts.get(key) ?? 0 });
+    trend.push({
+      date: key,
+      completed: trendCounts.get(key) ?? 0,
+      created: createdCounts.get(key) ?? 0,
+      minutes: minutesByDay.get(key) ?? 0,
+    });
   }
+
+  const byCategory = categoryRaw.map((entry) => {
+    const category = entry.category?.[0];
+    return {
+      categoryId: entry._id,
+      name: category?.name ?? null,
+      color: category?.color ?? null,
+      count: entry.count,
+    };
+  });
+
+  const timeTotals = timeTotalsRaw[0] ?? { estimated: 0, logged: 0 };
 
   const active = total - cancelled;
   const completionRate = active > 0 ? Math.round((completed / active) * 100) : 0;
@@ -99,6 +193,9 @@ export const getSummary = asyncHandler(async (req, res) => {
       missedOccurrences,
       completionRate,
       trend,
+      byCategory,
+      timeEstimatedMinutes: timeTotals.estimated,
+      timeLoggedMinutes: timeTotals.logged,
     },
   });
 });
