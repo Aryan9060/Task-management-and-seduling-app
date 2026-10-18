@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import api from '../api/client.js';
 import { useAuth } from '../context/AuthContext.jsx';
+import { useTheme } from '../context/ThemeContext.jsx';
 import { formatDateTime } from '../utils/datetime.js';
+import ThemeSelector from './ThemeSelector.jsx';
 
 const NOTIF_LABELS = {
   assigned: 'Assigned to you',
@@ -10,6 +12,56 @@ const NOTIF_LABELS = {
   reminder: 'Reminder',
   overdue: 'Overdue',
 };
+
+const NAV_ITEMS = [
+  { to: '/', label: 'Dashboard', icon: '📊' },
+  { to: '/tasks', label: 'Tasks', icon: '✅' },
+  { to: '/calendar', label: 'Calendar', icon: '📅' },
+  { to: '/board', label: 'Board', icon: '🎯' },
+  { to: '/categories', label: 'Categories', icon: '📁' },
+  { to: '/timer', label: 'Timer', icon: '⏱️' },
+  { to: '/notifications', label: 'Notifications', icon: '𔔿' },
+];
+
+function BrandMark() {
+  return (
+    <svg
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12 2L2 7l10 5 10-5-10-5z" />
+      <path d="M2 17l10 5 10-5" />
+      <path d="M12 12L2 17l10-5" />
+    </svg>
+  );
+}
+
+function MenuIcon() {
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <line x1="3" y1="12" x2="21" y2="12" />
+      <line x1="3" y1="6" x2="21" y2="6" />
+      <line x1="3" y1="18" x2="21" y2="18" />
+    </svg>
+  );
+}
 
 function BellIcon() {
   return (
@@ -32,11 +84,14 @@ function BellIcon() {
 
 export default function Layout() {
   const { user, logout } = useAuth();
+  const { theme, setTheme, themes } = useTheme();
   const navigate = useNavigate();
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [open, setOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const bellRef = useRef(null);
+  const sidebarRef = useRef(null);
 
   const loadNotifications = useCallback(async () => {
     try {
@@ -66,6 +121,15 @@ export default function Layout() {
     document.addEventListener('mousedown', close);
     return () => document.removeEventListener('mousedown', close);
   }, [open]);
+
+  useEffect(() => {
+    if (!sidebarOpen) return undefined;
+    const close = (event) => {
+      if (sidebarRef.current && !sidebarRef.current.contains(event.target)) setSidebarOpen(false);
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [sidebarOpen]);
 
   const openNotification = async (notification) => {
     setOpen(false);
@@ -102,24 +166,68 @@ export default function Layout() {
 
   return (
     <div className="app-shell">
-      <header className="topbar">
-        <div className="topbar-inner">
-          <div className="brand">
-            <span className="brand-mark" />
-            TaskFlow
-          </div>
-          <nav className="nav">
-            <NavLink to="/" end>
-              Dashboard
+      <aside className={`sidebar ${sidebarOpen ? 'sidebar-open' : ''}`} ref={sidebarRef}>
+        <div className="sidebar-header">
+          <BrandMark />
+          <span className="sidebar-brand">DaliTak</span>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm sidebar-close"
+            aria-label="Close sidebar"
+            onClick={() => setSidebarOpen(false)}
+          >
+            ✕
+          </button>
+        </div>
+        <nav className="sidebar-nav" aria-label="Main navigation">
+          {NAV_ITEMS.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.to === '/'}
+              className={({ isActive }) =>
+                `sidebar-nav-link${isActive ? ' sidebar-nav-link-active' : ''}`
+              }
+              onClick={() => setSidebarOpen(false)}
+            >
+              <span className="sidebar-nav-icon">{item.icon}</span>
+              <span className="sidebar-nav-label">{item.label}</span>
             </NavLink>
-            <NavLink to="/tasks">Tasks</NavLink>
-            <NavLink to="/calendar">Calendar</NavLink>
-            <NavLink to="/board">Board</NavLink>
-            <NavLink to="/categories">Categories</NavLink>
-            <NavLink to="/timer">Timer</NavLink>
-            <NavLink to="/notifications">Notifications</NavLink>
-          </nav>
-          <div className="user-area">
+          ))}
+        </nav>
+        <div className="sidebar-footer">
+          <ThemeSelector />
+          <div className="sidebar-user">
+            <span className="sidebar-user-name">{user?.name}</span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={handleLogout}
+            >
+              Sign out
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      <div className="app-body">
+        <header className="topbar">
+          <div className="topbar-inner">
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm topbar-menu"
+              aria-label="Open navigation"
+              aria-expanded={sidebarOpen}
+              onClick={() => setSidebarOpen((v) => !v)}
+            >
+              <MenuIcon />
+            </button>
+            <div className="brand">
+              <BrandMark />
+              <span className="brand-text">DaliTak</span>
+            </div>
+            <div className="topbar-spacer" />
+            <ThemeSelector />
             <div className="notif-bell" ref={bellRef}>
               <button
                 type="button"
@@ -182,11 +290,11 @@ export default function Layout() {
               Log out
             </button>
           </div>
-        </div>
-      </header>
-      <main className="page">
-        <Outlet />
-      </main>
+        </header>
+        <main className="page">
+          <Outlet />
+        </main>
+      </div>
     </div>
   );
 }
