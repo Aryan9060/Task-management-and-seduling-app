@@ -8,6 +8,8 @@ import Tasks from './pages/Tasks.jsx';
 import Calendar from './pages/Calendar.jsx';
 import Board from './pages/Board.jsx';
 import Categories from './pages/Categories.jsx';
+import Timer from './pages/Timer.jsx';
+import Notifications from './pages/Notifications.jsx';
 import { useAuth } from './context/AuthContext.jsx';
 
 export default function App() {
@@ -24,6 +26,8 @@ export default function App() {
           <Route path="/calendar" element={<Calendar />} />
           <Route path="/board" element={<Board />} />
           <Route path="/categories" element={<Categories />} />
+          <Route path="/timer" element={<Timer />} />
+          <Route path="/notifications" element={<Notifications />} />
         </Route>
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

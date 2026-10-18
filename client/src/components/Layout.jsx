@@ -116,6 +116,8 @@ export default function Layout() {
             <NavLink to="/calendar">Calendar</NavLink>
             <NavLink to="/board">Board</NavLink>
             <NavLink to="/categories">Categories</NavLink>
+            <NavLink to="/timer">Timer</NavLink>
+            <NavLink to="/notifications">Notifications</NavLink>
           </nav>
           <div className="user-area">
             <div className="notif-bell" ref={bellRef}>
